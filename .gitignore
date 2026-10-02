@@ -1,0 +1,26 @@
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# ---- 运行时数据与上传文件 ----
+houduan/data/
+houduan/uploads/
+*.log
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.iml
+
+# ---- 系统文件 ----
+Thumbs.db
+.DS_Store
