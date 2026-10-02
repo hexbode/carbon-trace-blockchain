@@ -1,0 +1,118 @@
+package com.carbon.trace.service.impl;
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.carbon.trace.common.ApiException;
+import com.carbon.trace.common.UserContext;
+import com.carbon.trace.entity.EmissionRecord;
+import com.carbon.trace.entity.ReportRecord;
+import com.carbon.trace.mapper.EmissionRecordMapper;
+import com.carbon.trace.mapper.ReportRecordMapper;
+import com.carbon.trace.service.CertificationService;
+import com.carbon.trace.service.ReportRecordService;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 报告提交记录服务实现
+ */
+@Service
+public class ReportRecordServiceImpl implements ReportRecordService {
+
+    private final ReportRecordMapper reportRecordMapper;
+    private final EmissionRecordMapper emissionRecordMapper;
+    private final CertificationService certificationService;
+
+    public ReportRecordServiceImpl(ReportRecordMapper reportRecordMapper,
+                                   EmissionRecordMapper emissionRecordMapper,
+                                   CertificationService certificationService) {
+        this.reportRecordMapper = reportRecordMapper;
+        this.emissionRecordMapper = emissionRecordMapper;
+        this.certificationService = certificationService;
+    }
+
+    @Override
+    public List<ReportRecord> list(String enterpriseId, String status, String keyword) {
+        LambdaQueryWrapper<ReportRecord> wrapper = new LambdaQueryWrapper<>();
+        if (StringUtils.hasText(enterpriseId)) {
+            wrapper.eq(ReportRecord::getEnterpriseId, enterpriseId);
+        }
+        if (StringUtils.hasText(status)) {
+            wrapper.eq(ReportRecord::getStatus, status);
+        }
+        if (StringUtils.hasText(keyword)) {
+            wrapper.and(w -> w.like(ReportRecord::getId, keyword)
+                    .or().like(ReportRecord::getEnterpriseName, keyword)
+                    .or().like(ReportRecord::getSourceName, keyword));
+        }
+        wrapper.orderByDesc(ReportRecord::getSubmittedAt);
+        return reportRecordMapper.selectList(wrapper);
+    }
+
+    @Override
+    public ReportRecord getById(String id) {
+        ReportRecord record = reportRecordMapper.selectById(id);
+        if (record == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "报告记录不存在");
+        }
+        return record;
+    }
+
+    @Override
+    @Transactional
+    public ReportRecord audit(String id, Map<String, Object> body) {
+        ReportRecord report = getById(id);
+        String result = body.get("result") == null ? null : String.valueOf(body.get("result"));
+        if (!"certified".equals(result) && !"rejected".equals(result)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "审核结果只能为 certified 或 rejected");
+        }
+        String opinion = body.get("opinion") == null ? null : String.valueOf(body.get("opinion"));
+
+        report.setStatus(result);
+        report.setAuditor(UserContext.currentName());
+        report.setAuditedAt(LocalDateTime.now());
+        report.setAuditOpinion(opinion);
+        reportRecordMapper.updateById(report);
+
+        // 同步更新对应排放记录的状态
+        if (StringUtils.hasText(report.getEmissionId())) {
+            EmissionRecord emission = emissionRecordMapper.selectById(report.getEmissionId());
+            if (emission != null) {
+                emission.setStatus(result);
+                emissionRecordMapper.updateById(emission);
+            }
+        }
+
+        // 认证通过：生成认证记录并上链
+        if ("certified".equals(result)) {
+            certificationService.certify(report);
+        }
+        return reportRecordMapper.selectById(id);
+    }
+
+    @Override
+    @Transactional
+    public ReportRecord apply(String id) {
+        ReportRecord report = getById(id);
+        // 企业端重新申请认证：状态改回 pending，清空审核信息
+        reportRecordMapper.update(null, new LambdaUpdateWrapper<ReportRecord>()
+                .eq(ReportRecord::getId, id)
+                .set(ReportRecord::getStatus, "pending")
+                .set(ReportRecord::getAuditor, null)
+                .set(ReportRecord::getAuditedAt, null)
+                .set(ReportRecord::getAuditOpinion, null));
+
+        if (StringUtils.hasText(report.getEmissionId())) {
+            emissionRecordMapper.update(null, new LambdaUpdateWrapper<EmissionRecord>()
+                    .eq(EmissionRecord::getId, report.getEmissionId())
+                    .set(EmissionRecord::getStatus, "pending"));
+        }
+        return reportRecordMapper.selectById(id);
+    }
+}

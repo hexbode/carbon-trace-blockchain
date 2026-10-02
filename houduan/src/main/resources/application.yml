@@ -1,0 +1,41 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: carbon-trace-backend
+  # 上传文件大小限制（头像等图片）
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 5MB
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 注意：请按本机实际 MySQL 账号密码修改下面的 username / password
+    url: jdbc:mysql://localhost:3306/carbon_emission?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456   # 请按本机实际密码修改
+
+mybatis-plus:
+  configuration:
+    # 数据库 snake_case 自动映射到 Java camelCase
+    map-underscore-to-camel-case: true
+    # 关闭 SQL 日志（需要调试可改为 org.apache.ibatis.logging.stdout.StdOutImpl）
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    banner: false
+    db-config:
+      # 默认主键策略，各实体用 @TableId 覆盖
+      id-type: auto
+
+# 自定义配置
+carbon:
+  jwt:
+    secret: carbon-trace-chain-2024-jwt-secret-key-please-change-0123456789abcdef
+    expire-hours: 24
+  # 上传文件保存目录（相对后端项目根目录），通过 /uploads/** 对外访问
+  upload:
+    dir: ./uploads
+  # 区块链数据文件（相对后端项目根目录）：区块与交易保存在此文件中，数据库不保存哈希
+  blockchain:
+    file: ./data/blockchain.json

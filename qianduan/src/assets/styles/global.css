@@ -1,0 +1,228 @@
+/* ============ 全局样式表 ============ */
+/* 描述：碳排放管理系统全局通用样式，包含 CSS 变量定义、基础重置、滚动条样式、
+   Element Plus 主题覆盖、通用工具类与业务通用组件样式（页面容器、统计卡片、面板、区块链展示等） */
+
+/* ---- CSS 全局变量定义（主题色、背景、文字色、边框、状态色）---- */
+:root {
+  --primary: #10b981;          /* 主题色：环保绿 */
+  --primary-dark: #059669;     /* 主题色深：用于 hover/active */
+  --primary-light: #d1fae5;    /* 主题色浅：用于背景或标签 */
+  --accent: #0ea5e9;           /* 辅助强调色：天蓝 */
+  --sidebar-bg: #0f172a;       /* 侧边栏背景：深蓝灰 */
+  --sidebar-active: #1e293b;   /* 侧边栏选中项背景 */
+  --bg: #f1f5f9;               /* 页面整体背景 */
+  --card-bg: #ffffff;          /* 卡片背景 */
+  --text-primary: #0f172a;     /* 主文字色 */
+  --text-regular: #475569;     /* 常规文字色 */
+  --text-secondary: #94a3b8;   /* 次要文字色 */
+  --border: #e2e8f0;           /* 统一边框色 */
+  --success: #10b981;          /* 成功状态色 */
+  --warning: #f59e0b;          /* 警告状态色 */
+  --danger: #ef4444;           /* 危险状态色 */
+  --info: #3b82f6;             /* 信息状态色 */
+}
+
+/* ---- 全局盒模型重置：统一使用 border-box ---- */
+* {
+  box-sizing: border-box;
+}
+
+/* ---- 页面与字体基础样式 ---- */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- 自定义滚动条样式 ---- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ---- Element Plus 主题覆盖 ---- */
+/* 主按钮：使用项目主题绿色 */
+.el-button--primary {
+  --el-button-bg-color: var(--primary);
+  --el-button-border-color: var(--primary);
+  --el-button-hover-bg-color: var(--primary-dark);
+  --el-button-hover-border-color: var(--primary-dark);
+  --el-button-active-bg-color: var(--primary-dark);
+  --el-button-active-border-color: var(--primary-dark);
+}
+
+/* 水平菜单选中项：使用主题色高亮底边 */
+.el-menu--horizontal > .el-menu-item.is-active {
+  border-bottom-color: var(--primary) !important;
+  color: var(--primary) !important;
+}
+
+/* 成功状态标签：浅绿背景 + 深绿文字 */
+.el-tag--success {
+  --el-tag-bg-color: #ecfdf5;
+  --el-tag-text-color: var(--primary-dark);
+  --el-tag-border-color: #a7f3d0;
+}
+
+/* ---- 通用工具类（flex 布局 / 间距 / 文字色）---- */
+.flex { display: flex; }
+.flex-center { display: flex; align-items: center; justify-content: center; }
+.flex-between { display: flex; align-items: center; justify-content: space-between; }
+.flex-1 { flex: 1; }
+.mb-16 { margin-bottom: 16px; }
+.mb-24 { margin-bottom: 24px; }
+.mt-16 { margin-top: 16px; }
+.gap-16 { gap: 16px; }
+.text-muted { color: var(--text-secondary); }
+.text-primary { color: var(--primary); }
+.text-danger { color: var(--danger); }
+.text-warning { color: var(--warning); }
+.text-success { color: var(--success); }
+
+/* ---- 页面容器：统一外层留白 ---- */
+.page-container {
+  padding: 24px;
+}
+
+/* ---- 页面标题区（标题 + 副标题）---- */
+.page-header {
+  margin-bottom: 24px;
+}
+.page-header h2 {
+  margin: 0 0 4px 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.page-header p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* ---- 统计卡片（首页/总览的指标展示块）---- */
+.stat-card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+  transition: box-shadow .2s, transform .2s;
+}
+/* 悬浮时上移并增加阴影，强调可交互 */
+.stat-card:hover {
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .06);
+  transform: translateY(-2px);
+}
+/* 卡片内：指标标签 */
+.stat-card .label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 卡片内：指标主数值 */
+.stat-card .value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+/* 卡片内：指标单位 */
+.stat-card .unit {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-left: 4px;
+}
+/* 卡片内：环比/同比趋势 */
+.stat-card .trend {
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* ---- 通用面板容器（带标题头与正文区）---- */
+.panel {
+  background: var(--card-bg);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+/* 面板头部：标题 + 操作区 */
+.panel-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-header .title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+/* 面板正文：默认内边距 */
+.panel-body {
+  padding: 20px;
+}
+
+/* ---- 区块链相关样式 ---- */
+/* 哈希文本：等宽字体，便于长哈希展示与换行 */
+.hash-text {
+  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  color: var(--info);
+  word-break: break-all;
+}
+
+/* 区块链时间轴项：用于展示区块/交易的时间线 */
+.block-chain-item {
+  position: relative;
+  padding-left: 32px;
+  padding-bottom: 24px;
+}
+/* 时间轴竖线（除最后一项外）*/
+.block-chain-item::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 24px;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.block-chain-item:last-child::before {
+  display: none;
+}
+/* 时间轴圆点：主题色背景 + 白色内容 */
+.block-chain-item .dot {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
