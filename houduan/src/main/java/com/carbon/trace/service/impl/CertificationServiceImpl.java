@@ -1,21 +1,23 @@
 package com.carbon.trace.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.carbon.trace.chain.BlockTransaction;
-import com.carbon.trace.chain.ChainStore;
+import com.carbon.trace.chain.ChainGateway;
+import com.carbon.trace.chain.model.ChainCertStatus;
+import com.carbon.trace.chain.model.ChainCertificate;
+import com.carbon.trace.chain.model.CertifyCommand;
 import com.carbon.trace.common.ApiException;
-import com.carbon.trace.common.BlockchainUtil;
 import com.carbon.trace.common.UserContext;
 import com.carbon.trace.entity.CertificationRecord;
 import com.carbon.trace.entity.ReportRecord;
 import com.carbon.trace.mapper.CertificationRecordMapper;
-import com.carbon.trace.service.BlockchainService;
 import com.carbon.trace.service.CertificationService;
+import com.carbon.trace.service.ChainSyncService;
+import com.carbon.trace.service.ComplianceService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -25,24 +27,33 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 认证记录服务实现
+ * 认证记录服务实现。
+ *
+ * 核验以链上存证为唯一依据：先按电子防伪码或交易哈希定位链上凭证，再由排放编号关联认证记录；
+ * 证书状态（有效 / 已撤销 / 已作废）以链上状态为准，业务库只提供审核意见等展示字段。
  */
 @Service
 public class CertificationServiceImpl implements CertificationService {
 
+    private static final Logger log = LoggerFactory.getLogger(CertificationServiceImpl.class);
+
     private static final String NOT_MATCH_MSG = "未在区块链存证中匹配到该哈希，请核对后重试";
     private static final String REVOKED_MSG = "该证书已被监管机构撤销，认证已失效";
+    private static final String INVALIDATED_MSG = "该认证存证已作废：对应的排放记录已被删除";
 
     private final CertificationRecordMapper certificationRecordMapper;
-    private final ChainStore chainStore;
-    private final BlockchainService blockchainService;
+    private final ChainGateway chainGateway;
+    private final ChainSyncService chainSyncService;
+    private final ComplianceService complianceService;
 
     public CertificationServiceImpl(CertificationRecordMapper certificationRecordMapper,
-                                    ChainStore chainStore,
-                                    BlockchainService blockchainService) {
+                                    ChainGateway chainGateway,
+                                    ChainSyncService chainSyncService,
+                                    ComplianceService complianceService) {
         this.certificationRecordMapper = certificationRecordMapper;
-        this.chainStore = chainStore;
-        this.blockchainService = blockchainService;
+        this.chainGateway = chainGateway;
+        this.chainSyncService = chainSyncService;
+        this.complianceService = complianceService;
     }
 
     @Override
@@ -80,20 +91,15 @@ public class CertificationServiceImpl implements CertificationService {
         if (!StringUtils.hasText(fingerprint)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "未查询到该电子防伪码对应的认证信息");
         }
-        // 以区块链存证为准：先在链上交易中定位该电子防伪码，再由排放编号关联认证记录
-        BlockTransaction chainTx = findChainTransaction(fingerprint.trim());
-        if (chainTx == null) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "未查询到该电子防伪码对应的认证信息");
-        }
-        CertificationRecord record = certificationRecordMapper.selectOne(
-                new LambdaQueryWrapper<CertificationRecord>()
-                        .eq(CertificationRecord::getEmissionId, chainTx.getEmissionId())
-                        .last("limit 1"));
+        // 以链上存证为准：链上定位该电子防伪码，再由排放编号关联认证记录
+        ChainCertificate chainCert = chainGateway.findByFingerprint(fingerprint.trim())
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "未查询到该电子防伪码对应的认证信息"));
+        CertificationRecord record = findRecordByEmissionId(chainCert.getEmissionId());
         if (record == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "未查询到该电子防伪码对应的认证信息");
         }
         // 防伪码与链上哈希均以链上存证为准展示，业务表被改动不影响前端取值
-        applyChainInfo(record, chainTx);
+        applyChainInfo(record, chainCert);
         return record;
     }
 
@@ -122,35 +128,56 @@ public class CertificationServiceImpl implements CertificationService {
         record.setRevokeReason(revokeReason);
         record.setRevokedAt(LocalDateTime.now());
         certificationRecordMapper.updateById(record);
+
+        // 撤销同样要写链：链上状态变为 REVOKED 且为终局状态，核验以链上状态为准
+        chainSyncService.afterCommit("撤销认证上链", record.getEnterpriseId(), record.getEnterpriseName(),
+                record.getPeriod(), () -> chainGateway.revoke(id, revokeReason));
         return record;
     }
 
     @Override
     public Map<String, Object> verify(String hash) {
         Map<String, Object> result = new LinkedHashMap<>();
-        // 以区块链存证为准：先按电子防伪码或交易哈希在链上交易中定位
-        BlockTransaction chainTx = findChainTransaction(hash);
-        if (chainTx == null) {
+        // 以链上存证为准：先按电子防伪码或交易哈希定位
+        ChainCertificate chainCert = chainGateway.findAny(hash).orElse(null);
+        if (chainCert == null) {
             result.put("valid", false);
             result.put("msg", NOT_MATCH_MSG);
             result.put("cert", null);
             return result;
         }
-        // 链上命中后仅关联认证记录判断撤销等业务状态，不使用其电子防伪码字段参与匹配
-        CertificationRecord cert = certificationRecordMapper.selectOne(
-                new LambdaQueryWrapper<CertificationRecord>()
-                        .eq(CertificationRecord::getEmissionId, chainTx.getEmissionId())
-                        .last("limit 1"));
-        if (cert != null && "revoked".equals(cert.getStatus())) {
-            // 已撤销的证书不再视为有效，但仍返回证书信息供前端展示撤销状态
+        CertificationRecord cert = findRecordByEmissionId(chainCert.getEmissionId());
+
+        // 链上状态优先：已撤销 / 已作废都不再视为有效，但仍返回证书信息供前端展示
+        if (chainCert.getStatus() == ChainCertStatus.REVOKED) {
+            if (cert != null) {
+                cert.setStatus("revoked");
+                if (StringUtils.hasText(chainCert.getReason())) {
+                    cert.setRevokeReason(chainCert.getReason());
+                }
+                applyChainInfo(cert, chainCert);
+            }
             result.put("valid", false);
             result.put("msg", REVOKED_MSG);
             result.put("cert", cert);
             return result;
         }
+        if (chainCert.getStatus() == ChainCertStatus.INVALID) {
+            if (cert != null) {
+                applyChainInfo(cert, chainCert);
+            }
+            result.put("valid", false);
+            result.put("msg", INVALIDATED_MSG);
+            result.put("cert", cert);
+            return result;
+        }
+
         if (cert != null) {
-            // 防伪码与链上哈希均以链上存证为准展示，业务表被改动不影响前端取值
-            applyChainInfo(cert, chainTx);
+            if ("revoked".equals(cert.getStatus())) {
+                // 业务库与链上状态不一致时以链为准，并留下排查线索
+                log.warn("业务库认证记录 {} 状态为 revoked，但链上存证为有效，已按链上状态返回。", cert.getId());
+            }
+            applyChainInfo(cert, chainCert);
         }
         result.put("valid", true);
         result.put("msg", "验证通过：该电子防伪码已在区块链存证中匹配成功");
@@ -164,10 +191,7 @@ public class CertificationServiceImpl implements CertificationService {
         String auditor = StringUtils.hasText(report.getAuditor()) ? report.getAuditor() : UserContext.currentName();
         String opinion = report.getAuditOpinion();
 
-        CertificationRecord cert = certificationRecordMapper.selectOne(
-                new LambdaQueryWrapper<CertificationRecord>()
-                        .eq(CertificationRecord::getEmissionId, report.getEmissionId())
-                        .last("limit 1"));
+        CertificationRecord cert = findRecordByEmissionId(report.getEmissionId());
         boolean create = cert == null;
         if (create) {
             cert = new CertificationRecord();
@@ -187,71 +211,55 @@ public class CertificationServiceImpl implements CertificationService {
         cert.setRevokeReason(null);
         cert.setRevokedAt(null);
 
-        // 组装待上链的交易（每 4 笔打包成一个区块）
-        Map<String, Object> tx = new LinkedHashMap<>();
-        tx.put("txHash", BlockchainUtil.generateTxHash(txSnapshot(report)));
-        tx.put("emissionId", report.getEmissionId());
-        tx.put("enterpriseName", report.getEnterpriseName());
-        tx.put("period", report.getPeriod());
-        tx.put("amount", report.getAmount());
-        tx.put("fingerprint", report.getFingerprint());
-        tx.put("auditor", auditor);
-
         if (create) {
             certificationRecordMapper.insert(cert);
         } else {
             certificationRecordMapper.updateById(cert);
         }
-        // 链数据保存在文件中，不受数据库事务保护，必须等事务提交后再上链，
-        // 否则事务回滚（如并发死锁）时链上会残留没有认证记录的孤儿交易
-        appendAfterCommit(tx);
+
+        // 合规判定由链上合约执行，判定结果作为合规快照随存证一起上链
+        int complianceFlags = complianceService.flagsForCertify(report.getEmissionId());
+
+        CertifyCommand command = new CertifyCommand();
+        command.setCertId(cert.getId());
+        command.setEnterpriseId(cert.getEnterpriseId());
+        command.setEnterpriseName(cert.getEnterpriseName());
+        command.setPeriod(cert.getPeriod());
+        command.setAmount(cert.getAmount());
+        command.setFingerprint(cert.getFingerprint());
+        command.setAuditor(auditor);
+        command.setComplianceFlags(complianceFlags);
+
+        // 链上数据不受数据库事务保护，必须等事务提交后再写链，否则事务回滚会在链上留下孤儿存证
+        chainSyncService.afterCommit("认证存证上链", cert.getEnterpriseId(), cert.getEnterpriseName(),
+                cert.getPeriod(), () -> chainGateway.certify(command));
         return cert;
     }
 
-    /** 事务提交后再写入链上，保证「链上有存证」与「库中有认证记录」一致 */
-    private void appendAfterCommit(Map<String, Object> tx) {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    blockchainService.appendTransaction(tx);
-                }
-            });
-        } else {
-            blockchainService.appendTransaction(tx);
+    // ---------------- 内部工具 ----------------
+
+    private CertificationRecord findRecordByEmissionId(String emissionId) {
+        if (!StringUtils.hasText(emissionId)) {
+            return null;
         }
+        return certificationRecordMapper.selectOne(new LambdaQueryWrapper<CertificationRecord>()
+                .eq(CertificationRecord::getEmissionId, emissionId)
+                .last("limit 1"));
     }
 
-    private Map<String, Object> txSnapshot(ReportRecord report) {
-        Map<String, Object> snapshot = new LinkedHashMap<>();
-        snapshot.put("emissionId", report.getEmissionId());
-        snapshot.put("enterpriseName", report.getEnterpriseName());
-        snapshot.put("period", report.getPeriod());
-        snapshot.put("amount", report.getAmount());
-        snapshot.put("fingerprint", report.getFingerprint());
-        snapshot.put("auditor", report.getAuditor());
-        return snapshot;
-    }
-
-    /**
-     * 在链上交易中按电子防伪码或交易哈希定位存证记录
-     * （忽略大小写、忽略 0x 前缀）。链上数据是验证的唯一依据。
-     */
-    private BlockTransaction findChainTransaction(String input) {
-        return chainStore.findByCodeOrHash(input);
-    }
-
-    /** 用链上交易回填单条认证记录的防伪码、交易哈希与所在区块 */
-    private void applyChainInfo(CertificationRecord record, BlockTransaction chainTx) {
-        if (record == null || chainTx == null) {
+    /** 用链上凭证回填单条认证记录的防伪码、交易哈希与所在区块 */
+    private void applyChainInfo(CertificationRecord record, ChainCertificate chainCert) {
+        if (record == null || chainCert == null || !chainCert.isExists()) {
             return;
         }
-        record.setFingerprint(chainTx.getFingerprint());
-        record.setTxHash(chainTx.getTxHash());
-        record.setBlockIndex(chainTx.getBlockIndex());
+        if (StringUtils.hasText(chainCert.getFingerprint())) {
+            record.setFingerprint(chainCert.getFingerprint());
+        }
+        record.setTxHash(chainCert.getTxHash());
+        record.setBlockIndex(chainCert.getBlockIndex() == null ? null : chainCert.getBlockIndex().intValue());
     }
 
-    /** 批量用链上交易回填认证记录的防伪码、交易哈希与所在区块（按排放编号关联） */
+    /** 批量用链上凭证回填认证记录（按排放编号关联） */
     private void fillChainInfo(List<CertificationRecord> records) {
         if (records == null || records.isEmpty()) {
             return;
@@ -264,9 +272,9 @@ public class CertificationServiceImpl implements CertificationService {
         if (emissionIds.isEmpty()) {
             return;
         }
-        Map<String, BlockTransaction> chainTxByEmission = chainStore.byEmissionIds(emissionIds);
+        Map<String, ChainCertificate> chainCertByEmission = chainGateway.certificatesByEmissionIds(emissionIds);
         for (CertificationRecord record : records) {
-            applyChainInfo(record, chainTxByEmission.get(record.getEmissionId()));
+            applyChainInfo(record, chainCertByEmission.get(record.getEmissionId()));
         }
     }
 }

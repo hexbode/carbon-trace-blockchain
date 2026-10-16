@@ -14,8 +14,10 @@ import com.carbon.trace.mapper.EmissionRecordMapper;
 import com.carbon.trace.mapper.EmissionSourceMapper;
 import com.carbon.trace.mapper.EnterpriseMapper;
 import com.carbon.trace.mapper.ReportRecordMapper;
+import com.carbon.trace.chain.ChainGateway;
 import com.carbon.trace.service.AlertService;
-import com.carbon.trace.service.BlockchainService;
+import com.carbon.trace.service.ChainSyncService;
+import com.carbon.trace.service.ComplianceService;
 import com.carbon.trace.service.EmissionRecordService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,7 +44,9 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
     private final ReportRecordMapper reportRecordMapper;
     private final CertificationRecordMapper certificationRecordMapper;
     private final AlertService alertService;
-    private final BlockchainService blockchainService;
+    private final ChainGateway chainGateway;
+    private final ChainSyncService chainSyncService;
+    private final ComplianceService complianceService;
 
     public EmissionRecordServiceImpl(EmissionRecordMapper emissionRecordMapper,
                                      EmissionSourceMapper emissionSourceMapper,
@@ -50,14 +54,18 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
                                      ReportRecordMapper reportRecordMapper,
                                      CertificationRecordMapper certificationRecordMapper,
                                      AlertService alertService,
-                                     BlockchainService blockchainService) {
+                                     ChainGateway chainGateway,
+                                     ChainSyncService chainSyncService,
+                                     ComplianceService complianceService) {
         this.emissionRecordMapper = emissionRecordMapper;
         this.emissionSourceMapper = emissionSourceMapper;
         this.enterpriseMapper = enterpriseMapper;
         this.reportRecordMapper = reportRecordMapper;
         this.certificationRecordMapper = certificationRecordMapper;
         this.alertService = alertService;
-        this.blockchainService = blockchainService;
+        this.chainGateway = chainGateway;
+        this.chainSyncService = chainSyncService;
+        this.complianceService = complianceService;
     }
 
     @Override
@@ -164,8 +172,12 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
             reportRecordMapper.insert(report);
         }
 
-        // 写入时判定：按规则检查本次填报是否触发异常告警（数据异常 / 因子不符 / 迟报）
+        // 写入时判定：合规规则由链上合约执行，按判定结果生成异常告警（链不可用时回退本地规则）
         alertService.evaluateOnEmissionCreate(record);
+
+        // 链上合规镜像（本期合计 / 年度合计 / 最近使用因子）在事务提交后同步，供配额与因子规则使用
+        chainSyncService.afterCommit("合规镜像同步上链", record.getEnterpriseId(), record.getEnterpriseName(),
+                record.getPeriod(), () -> complianceService.syncMirrors(record));
 
         return record;
     }
@@ -180,8 +192,15 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         reportRecordMapper.delete(new LambdaQueryWrapper<ReportRecord>()
                 .eq(ReportRecord::getEmissionId, id));
         emissionRecordMapper.deleteById(id);
-        // 链上交易不在数据库中，需在代码层同步移除
-        blockchainService.removeByEmissionId(id);
+        // 链上不可删除：删除排放记录只能把链上存证标记为作废（作废状态保留在链上，历史留痕不可抹除）
+        String enterpriseId = record == null ? null : record.getEnterpriseId();
+        String enterpriseName = record == null ? null : record.getEnterpriseName();
+        String period = record == null ? null : record.getPeriod();
+        chainSyncService.afterCommit("排放记录作废上链", enterpriseId, enterpriseName, period,
+                () -> chainGateway.invalidateByEmissionId(id, "排放记录被企业删除"));
+        // 删除后重算链上合计镜像，避免镜像残留偏高导致后续配额误判
+        chainSyncService.afterCommit("合规镜像重算上链", enterpriseId, enterpriseName, period,
+                () -> complianceService.syncMirrors(enterpriseId, period));
         // 记录被撤销后，该企业该报告期由规则产生的告警也应一并失效
         if (record != null) {
             alertService.removeByEnterpriseAndPeriod(record.getEnterpriseId(), record.getPeriod());
@@ -190,7 +209,9 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
 
     /**
      * 生成统一编号：CR + 6 位序号。
-     * 排放记录、报告记录、认证记录三表共用同一编号，因此需同时避开三张表中已占用的编号。
+     * 排放记录、报告记录、认证记录三表共用同一编号，因此需同时避开三张表中已占用的编号；
+     * 此外还要避开**链上已存在的编号**：链上只追加不删除，编号一旦上链（即使业务记录已被删除）
+     * 也不能复用，否则新认证会与链上遗留的「已撤销 / 已作废」存证同号而无法上链。
      */
     private String nextRecordId() {
         long seq = emissionRecordMapper.selectCount(null);
@@ -200,7 +221,8 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
             id = "CR" + String.format("%06d", seq);
         } while (emissionRecordMapper.selectById(id) != null
                 || reportRecordMapper.selectById(id) != null
-                || certificationRecordMapper.selectById(id) != null);
+                || certificationRecordMapper.selectById(id) != null
+                || chainGateway.findByEmissionId(id).isPresent());
         return id;
     }
 

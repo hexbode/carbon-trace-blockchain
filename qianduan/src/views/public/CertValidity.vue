@@ -53,6 +53,23 @@
           <el-icon><Link /></el-icon>
           该电子防伪码已通过区块链完整性校验，与链上存证一致，未被篡改。
         </div>
+        <!-- 链上合规判定：判定由智能合约执行，结果随认证存证一起上链 -->
+        <div class="compliance-box">
+          <div class="compliance-head">
+            <h3>链上合规判定</h3>
+            <el-tag v-if="compliance" :type="compliance.compliant ? 'success' : 'danger'" size="small">
+              {{ compliance.compliant ? '合规' : '命中异常规则' }}
+            </el-tag>
+            <span v-else class="compliance-loading">读取中…</span>
+          </div>
+          <ul v-if="compliance && compliance.items && compliance.items.length" class="compliance-list">
+            <li v-for="item in compliance.items" :key="item.rule">
+              {{ item.typeLabel }}
+              <span class="level">（{{ levelLabel(item.level) }}）</span>
+            </li>
+          </ul>
+          <p v-else-if="compliance" class="compliance-ok">该项排放数据未命中任何异常规则。</p>
+        </div>
       </div>
     </div>
 
@@ -75,21 +92,38 @@ import { ref, onMounted } from 'vue'
 // 认证校验接口与固定示例证书接口
 import { verifyCertification } from '@/api/certification'
 import { getSampleCerts } from '@/api/publicApi'
+import { getPublicCompliance } from '@/api/compliance'
 
 // ===== 验证状态 =====
 const inputHash = ref('')     // 输入的哈希
 const result = ref(null)      // 验证结果
 const samples = ref([])       // 示例哈希（从公共接口获取真实数据）
+const compliance = ref(null)  // 链上合规判定快照
 
 // 执行验证：调用后端校验接口比对防伪码 / 交易哈希
 async function verify() {
   const hash = inputHash.value.trim()
   if (!hash) return
+  compliance.value = null
   try {
     result.value = await verifyCertification({ hash })
   } catch (e) {
     result.value = null
   }
+  // 验证通过后补充读取该证书的链上合规判定快照
+  const fingerprint = result.value?.valid ? result.value?.cert?.fingerprint : null
+  if (fingerprint) {
+    try {
+      compliance.value = await getPublicCompliance(fingerprint)
+    } catch (e) {
+      compliance.value = null
+    }
+  }
+}
+
+// 告警级别中文名
+function levelLabel(level) {
+  return { high: '高危', medium: '中危', low: '低危' }[level] || level
 }
 
 // 初始化：拉取固定示例证书用于展示示例防伪码
@@ -133,6 +167,17 @@ onMounted(async () => {
   margin-top: 16px; padding: 12px 16px; background: #fff; border-radius: 8px;
   font-size: 13px; color: #059669; display: flex; align-items: center; gap: 6px;
 }
+/* 链上合规判定区块 */
+.compliance-box {
+  margin-top: 16px; padding: 14px 16px; background: #fff; border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.compliance-head { display: flex; align-items: center; gap: 10px; }
+.compliance-head h3 { margin: 0; font-size: 14px; color: #0f172a; }
+.compliance-loading { font-size: 12px; color: #94a3b8; }
+.compliance-list { margin: 10px 0 0; padding-left: 18px; font-size: 13px; color: #b45309; }
+.compliance-list .level { color: #94a3b8; }
+.compliance-ok { margin: 10px 0 0; font-size: 13px; color: #059669; }
 /* 示例哈希区 */
 .samples { padding: 20px; margin-top: 20px; }
 .samples h3 { margin: 0 0 12px; font-size: 15px; }

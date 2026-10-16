@@ -24,4 +24,10 @@ public interface AlertService {
 
     /** 删除排放记录时，清理该企业该报告期下由规则产生的告警，避免残留失效告警 */
     void removeByEnterpriseAndPeriod(String enterpriseId, String period);
+
+    /**
+     * 记录一条链上同步失败告警（type=chain_failed / level=high）。
+     * 链上写入重试仍失败时调用，纳入监管端待处理告警流，便于及时发现链外存证缺失。
+     */
+    void reportChainFailure(String enterpriseId, String enterpriseName, String period, String message);
 }

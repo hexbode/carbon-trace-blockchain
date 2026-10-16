@@ -1,49 +1,100 @@
 package com.carbon.trace.chain;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.carbon.trace.chain.model.ChainCertCount;
+import com.carbon.trace.entity.CertificationRecord;
 import com.carbon.trace.mapper.CertificationRecordMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * 启动时校验链上数据与业务库是否一致。
+ * 链上存证与业务库的一致性对账。
  *
- * 链数据保存在文件中，若该文件被误删，应用会以空链（仅创世区块）启动，
- * 此时业务库中的认证记录在链上将查不到存证。这里主动检测并输出告警，便于及时发现。
+ * 对账口径（迁移到真链后发生变化）：
+ *  - 链上只追加不删除，删除排放记录对应的是「作废」状态，作废存证只存在于链上；
+ *    因此不再比对"总数"，而是分别比对 有效 / 已撤销 的数量，并把差额解释为已删除记录的作废存证。
+ *  - 链探活失败或处于离线桩模式时跳过对账，避免误报。
  */
 @Component
 public class ChainIntegrityChecker {
 
     private static final Logger log = LoggerFactory.getLogger(ChainIntegrityChecker.class);
 
-    private final ChainStore chainStore;
+    private final ChainGateway chainGateway;
     private final CertificationRecordMapper certificationRecordMapper;
 
-    public ChainIntegrityChecker(ChainStore chainStore, CertificationRecordMapper certificationRecordMapper) {
-        this.chainStore = chainStore;
+    public ChainIntegrityChecker(ChainGateway chainGateway, CertificationRecordMapper certificationRecordMapper) {
+        this.chainGateway = chainGateway;
         this.certificationRecordMapper = certificationRecordMapper;
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    public void check() {
-        int txCount = chainStore.txCount();
-        Long countResult = certificationRecordMapper.selectCount(null);
-        long certCount = countResult == null ? 0L : countResult;
+    public void checkOnStartup() {
+        check();
+    }
 
-        // 链被清空但业务库仍有认证记录：历史存证可能已丢失，需人工介入
-        if (txCount == 0 && certCount > 0) {
-            log.error("链上数据与业务库严重不一致：链上没有任何交易，但认证记录有 {} 条。"
-                            + "请检查链数据文件（{}）是否被误删后重建，历史存证可能已丢失。",
-                    certCount, chainStore.file());
+    /** 定期复核（间隔见 carbon.chain.integrity-interval-ms） */
+    @Scheduled(fixedDelayString = "${carbon.chain.integrity-interval-ms:300000}",
+            initialDelayString = "${carbon.chain.integrity-interval-ms:300000}")
+    public void checkPeriodically() {
+        check();
+    }
+
+    public void check() {
+        if (!"webase".equals(chainGateway.mode())) {
+            log.warn("当前为离线桩模式（stub），链上无真实存证，跳过链上一致性对账。");
             return;
         }
-        // 数量对不上：例如应用在事务提交后、写链前异常退出
-        if (txCount != certCount) {
-            log.warn("链上数据与业务库数量不一致：链上交易 {} 笔，认证记录 {} 条，请核实。", txCount, certCount);
+        ChainCertCount count;
+        try {
+            count = chainGateway.countCertificates();
+        } catch (RuntimeException e) {
+            log.warn("链上一致性对账跳过：链上存证计数获取失败（{}）", e.getMessage());
             return;
         }
-        log.info("链上数据与业务库一致性校验通过：{} 笔交易 / {} 条认证记录", txCount, certCount);
+
+        Long totalResult = certificationRecordMapper.selectCount(null);
+        long totalRecords = totalResult == null ? 0L : totalResult;
+        long validRecords = countByStatus("valid");
+        long revokedRecords = countByStatus("revoked");
+
+        // 链被清空或合约地址配错：历史存证可能已丢失，需要人工介入
+        if (count.getTotal() == 0 && totalRecords > 0) {
+            log.error("链上数据与业务库严重不一致：链上没有任何存证，但业务库认证记录有 {} 条。"
+                            + "请检查合约地址配置是否正确、以及是否误部署了新合约。", totalRecords);
+            return;
+        }
+
+        boolean consistent = true;
+        if (count.getValid() != validRecords) {
+            consistent = false;
+            log.warn("链上与业务库不一致：链上有效存证 {} 笔，业务库有效认证记录 {} 条，请核实。",
+                    count.getValid(), validRecords);
+        }
+        if (count.getRevoked() != revokedRecords) {
+            consistent = false;
+            log.warn("链上与业务库不一致：链上已撤销存证 {} 笔，业务库已撤销认证记录 {} 条，请核实。",
+                    count.getRevoked(), revokedRecords);
+        }
+
+        long activeRecords = count.getTotal() - count.getInvalid();
+        if (consistent) {
+            log.info("链上数据与业务库一致性校验通过：有效 {} / 已撤销 {} / 已作废 {}；"
+                            + "业务库认证记录 {} 条（链上剔除作废后 {} 笔）。",
+                    count.getValid(), count.getRevoked(), count.getInvalid(), totalRecords, activeRecords);
+        } else if (activeRecords != totalRecords) {
+            log.info("链上存证（剔除已作废 {} 笔）共 {} 笔，业务库认证记录 {} 条，差额为已删除排放记录对应的作废存证，属预期。",
+                    count.getInvalid(), activeRecords, totalRecords);
+        }
+    }
+
+    private long countByStatus(String status) {
+        Long value = certificationRecordMapper.selectCount(new LambdaQueryWrapper<CertificationRecord>()
+                .eq(CertificationRecord::getStatus, status));
+        return value == null ? 0L : value;
     }
 }

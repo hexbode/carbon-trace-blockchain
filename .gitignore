@@ -11,10 +11,16 @@ dist/
 dist-ssr/
 *.local
 
+# ---- 本机 npm 配置（按本机网络选择镜像源，不入库）----
+.npmrc
+
 # ---- 运行时数据与上传文件 ----
-houduan/data/
 houduan/uploads/
 *.log
+
+# ---- 本机链配置（含合约地址与链账户，不入库）----
+application-local.yml
+application-local.yaml
 
 # ---- IDE ----
 .idea/

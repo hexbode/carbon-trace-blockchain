@@ -56,6 +56,12 @@
             <el-descriptions-item label="所在区块">第 {{ current.blockIndex }} 号区块</el-descriptions-item>
             <el-descriptions-item label="审核人">{{ current.auditor }}</el-descriptions-item>
             <el-descriptions-item label="审核意见">{{ current.auditOpinion }}</el-descriptions-item>
+            <el-descriptions-item label="链上合规判定">
+              <el-tag v-if="compliance" :type="compliance.compliant ? 'success' : 'danger'" size="small">
+                {{ compliance.compliant ? '合规' : '命中异常规则' }}
+              </el-tag>
+              <span v-else class="compliance-none">—</span>
+            </el-descriptions-item>
             <el-descriptions-item label="认证时间">{{ current.certifiedAt }}</el-descriptions-item>
           </el-descriptions>
         </div>
@@ -85,6 +91,8 @@ import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store'
 // 引入认证记录接口
 import { getCertifications } from '@/api/certification'
+// 引入链上合规判定接口
+import { getCertificateCompliance } from '@/api/compliance'
 // 引入 jsPDF：把绘制好的证书画布打包成 PDF 文件
 import { jsPDF } from 'jspdf'
 
@@ -102,8 +110,19 @@ const latest = computed(() => certs.value[0] || null)
 // 证书详情弹窗显隐控制与当前选中证书
 const showCert = ref(false)
 const current = ref(null)
-// 打开证书详情弹窗：记录当前证书并显示
-function viewCert(cert) { current.value = cert; showCert.value = true }
+// 当前证书的链上合规判定快照
+const compliance = ref(null)
+// 打开证书详情弹窗：记录当前证书并读取其链上合规判定
+async function viewCert(cert) {
+  current.value = cert
+  showCert.value = true
+  compliance.value = null
+  try {
+    compliance.value = await getCertificateCompliance(cert.id)
+  } catch (e) {
+    compliance.value = null
+  }
+}
 // 文本超宽时截断并加省略号（用于 canvas 绘制时防止溢出）
 function clipText(ctx, text, maxWidth) {
   if (ctx.measureText(text).width <= maxWidth) return text

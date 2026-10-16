@@ -1,0 +1,406 @@
+[
+  {
+    "inputs": [],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "key", "type": "bytes32" },
+      { "indexed": false, "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "indexed": false, "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "quotaScaled", "type": "uint256" }
+    ],
+    "name": "QuotaSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "key", "type": "bytes32" },
+      { "indexed": false, "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "indexed": false, "internalType": "string", "name": "period", "type": "string" },
+      { "indexed": false, "internalType": "uint256", "name": "amountScaled", "type": "uint256" }
+    ],
+    "name": "PeriodTotalSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "key", "type": "bytes32" },
+      { "indexed": false, "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "indexed": false, "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "amountScaled", "type": "uint256" }
+    ],
+    "name": "YearTotalSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "bytes32", "name": "key", "type": "bytes32" },
+      { "indexed": false, "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "indexed": false, "internalType": "string", "name": "sourceCode", "type": "string" },
+      { "indexed": false, "internalType": "uint256", "name": "factorScaled", "type": "uint256" }
+    ],
+    "name": "FactorRemembered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": false, "internalType": "uint256", "name": "oldBp", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "newBp", "type": "uint256" }
+    ],
+    "name": "FluctuationThresholdChanged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": false, "internalType": "uint256", "name": "oldMonths", "type": "uint256" },
+      { "indexed": false, "internalType": "uint256", "name": "newMonths", "type": "uint256" }
+    ],
+    "name": "LateReportMonthsChanged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "address", "name": "account", "type": "address" },
+      { "indexed": false, "internalType": "bool", "name": "allowed", "type": "bool" }
+    ],
+    "name": "WriterChanged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      { "indexed": true, "internalType": "address", "name": "previousOwner", "type": "address" },
+      { "indexed": true, "internalType": "address", "name": "newOwner", "type": "address" }
+    ],
+    "name": "OwnerChanged",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "OK",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "QUOTA_EXCEEDED",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLUCTUATION_EXCEEDED",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MISSING_ACTIVITY_DATA",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FACTOR_MISMATCH",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "LATE_REPORT",
+    "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLAG_QUOTA",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLAG_FLUCTUATION",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLAG_ACTIVITY",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLAG_FACTOR",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "FLAG_LATE",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "BP_STEP",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "owner",
+    "outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "", "type": "address" }],
+    "name": "writers",
+    "outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "fluctuationThresholdBp",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "lateReportMonths",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "account", "type": "address" }],
+    "name": "addWriter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "address", "name": "account", "type": "address" }],
+    "name": "removeWriter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint256", "name": "bp", "type": "uint256" }],
+    "name": "setFluctuationThresholdBp",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint256", "name": "months", "type": "uint256" }],
+    "name": "setLateReportMonths",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "internalType": "uint256", "name": "quotaScaled", "type": "uint256" }
+    ],
+    "name": "setAnnualQuota",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" }
+    ],
+    "name": "annualQuotaOf",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "string", "name": "period", "type": "string" },
+      { "internalType": "uint256", "name": "amountScaled", "type": "uint256" }
+    ],
+    "name": "setPeriodTotal",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "string", "name": "period", "type": "string" }
+    ],
+    "name": "periodTotalOf",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "internalType": "uint256", "name": "amountScaled", "type": "uint256" }
+    ],
+    "name": "setYearTotal",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" }
+    ],
+    "name": "yearTotalOf",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "string", "name": "sourceCode", "type": "string" },
+      { "internalType": "uint256", "name": "factorScaled", "type": "uint256" }
+    ],
+    "name": "rememberFactor",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "string", "name": "sourceCode", "type": "string" }
+    ],
+    "name": "lastFactorOf",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "internalType": "uint256", "name": "fallbackYearToDateScaled", "type": "uint256" }
+    ],
+    "name": "checkCompliance",
+    "outputs": [
+      { "internalType": "uint8", "name": "code", "type": "uint8" },
+      { "internalType": "bool", "name": "compliant", "type": "bool" },
+      { "internalType": "string", "name": "reason", "type": "string" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "currentTotalScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "previousTotalScaled", "type": "uint256" }
+    ],
+    "name": "checkFluctuation",
+    "outputs": [
+      { "internalType": "uint8", "name": "code", "type": "uint8" },
+      { "internalType": "bool", "name": "compliant", "type": "bool" },
+      { "internalType": "int256", "name": "deltaBp", "type": "int256" },
+      { "internalType": "string", "name": "reason", "type": "string" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [{ "internalType": "uint256", "name": "activityDataScaled", "type": "uint256" }],
+    "name": "checkActivity",
+    "outputs": [
+      { "internalType": "uint8", "name": "code", "type": "uint8" },
+      { "internalType": "bool", "name": "compliant", "type": "bool" },
+      { "internalType": "string", "name": "reason", "type": "string" }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "string", "name": "sourceCode", "type": "string" },
+      { "internalType": "uint256", "name": "factorScaled", "type": "uint256" }
+    ],
+    "name": "checkFactor",
+    "outputs": [
+      { "internalType": "uint8", "name": "code", "type": "uint8" },
+      { "internalType": "bool", "name": "compliant", "type": "bool" },
+      { "internalType": "uint256", "name": "previousFactorScaled", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "periodYyyymm", "type": "uint256" },
+      { "internalType": "uint256", "name": "currentYyyymm", "type": "uint256" }
+    ],
+    "name": "checkLateReport",
+    "outputs": [
+      { "internalType": "uint8", "name": "code", "type": "uint8" },
+      { "internalType": "bool", "name": "compliant", "type": "bool" },
+      { "internalType": "string", "name": "reason", "type": "string" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "string", "name": "enterpriseId", "type": "string" },
+      { "internalType": "uint256", "name": "year", "type": "uint256" },
+      { "internalType": "string", "name": "sourceCode", "type": "string" },
+      { "internalType": "uint256", "name": "currentTotalScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "previousTotalScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "yearToDateScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "activityDataScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "factorScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "periodYyyymm", "type": "uint256" },
+      { "internalType": "uint256", "name": "currentYyyymm", "type": "uint256" }
+    ],
+    "name": "checkAll",
+    "outputs": [
+      { "internalType": "uint16", "name": "flags", "type": "uint16" },
+      { "internalType": "int256", "name": "deltaBp", "type": "int256" },
+      { "internalType": "uint256", "name": "previousFactorScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "quotaScaled", "type": "uint256" },
+      { "internalType": "uint256", "name": "yearToDateUsed", "type": "uint256" },
+      { "internalType": "uint256", "name": "thresholdBp", "type": "uint256" }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

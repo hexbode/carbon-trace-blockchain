@@ -57,6 +57,12 @@
           </el-table-column>
           <el-table-column prop="auditor" label="审核人" min-width="90" align="center" />
           <el-table-column prop="certifiedAt" label="认证时间" min-width="160" align="center" />
+          <!-- 链上合规判定：判定由智能合约执行，按需读取，避免列表逐行发起链上调用 -->
+          <el-table-column label="链上合规" min-width="110" align="center">
+            <template #default="{ row }">
+              <el-button text type="primary" size="small" @click="viewCompliance(row)">查看判定</el-button>
+            </template>
+          </el-table-column>
           <el-table-column label="状态" min-width="90" align="center">
             <template #default="{ row }">
               <el-tag :type="row.status === 'revoked' ? 'danger' : 'success'" size="small">
@@ -124,6 +130,8 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 引入认证记录接口
 import { getCertifications, revokeCertification } from '@/api/certification'
+// 引入链上合规判定接口
+import { getCertificateCompliance } from '@/api/compliance'
 
 // 筛选条件响应式状态：关键词 + 状态
 const filters = reactive({ keyword: '', status: '' })
@@ -211,6 +219,21 @@ async function confirmRevoke() {
 // 查看撤销详情：弹框展示撤销原因与撤销时间
 function viewRevoke(row) {
   ElMessageBox.alert(`撤销原因：${row.revokeReason}\n撤销时间：${row.revokedAt || '-'}`, '撤销详情', { confirmButtonText: '确定' })
+}
+
+// 查看链上合规判定：读取该证书上链时由合约给出的判定快照
+async function viewCompliance(row) {
+  const data = await getCertificateCompliance(row.id)
+  const items = (data.items || []).map(i => `${i.typeLabel}（${levelLabel(i.level)}）`).join('\n')
+  const content = data.compliant
+    ? '合规：该项排放数据未命中任何异常规则。'
+    : `命中异常规则：\n${items}`
+  ElMessageBox.alert(content, '链上合规判定', { confirmButtonText: '确定' })
+}
+
+// 告警级别中文名
+function levelLabel(level) {
+  return { high: '高危', medium: '中危', low: '低危' }[level] || level
 }
 
 // 初始化加载

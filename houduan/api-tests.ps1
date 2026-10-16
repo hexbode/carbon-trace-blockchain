@@ -248,6 +248,45 @@ Test-Status "告警列表返回 200" $resp.Status 200
 $resp = Invoke-Api -Method Get -Uri "$base/api/audit-organizations" -Token $tokens['reg']
 Test-Status "审核机构列表返回 200" $resp.Status 200
 
+# ===== 九、链模式与合规判定 =====
+Write-Host "`n===== 九、链模式与合规判定 =====" -ForegroundColor Cyan
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/blockchain/health" -Token $tokens['reg']
+Test-Status "/api/blockchain/health 返回 200" $resp.Status 200
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/blockchain/stats" -Token $tokens['reg']
+Test-Status "/api/blockchain/stats 返回 200（含链模式）" $resp.Status 200
+$stats = $null
+try { $stats = $resp.Body | ConvertFrom-Json } catch { }
+Test-True "/api/blockchain/stats 返回 mode 字段" ([bool]($null -ne $stats.mode)) "实际: $($resp.Body)"
+Test-True "/api/blockchain/stats 返回 chainAvailable 字段" ([bool]($null -ne $stats.PSObject.Properties['chainAvailable'])) "实际: $($resp.Body)"
+
+$checkBody = @{ enterpriseId = 'ENT20240001'; period = '2024-01'; sourceCode = 'S01'; activityData = 100; factor = 2.5 }
+$resp = Invoke-Api -Method Post -Uri "$base/api/compliance/check" -Body $checkBody -Token $tokens['reg']
+Test-Status "/api/compliance/check 返回 200" $resp.Status 200
+$comp = $null
+try { $comp = $resp.Body | ConvertFrom-Json } catch { }
+Test-True "/api/compliance/check 返回 flags 字段" ([bool]($null -ne $comp.flags)) "实际: $($resp.Body)"
+Test-True "/api/compliance/check 返回 onChain 字段" ([bool]($null -ne $comp.PSObject.Properties['onChain'])) "实际: $($resp.Body)"
+Test-True "/api/compliance/check 返回 items 列表" ([bool]($null -ne $comp.items)) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/compliance/threshold" -Token $tokens['reg']
+Test-Status "/api/compliance/threshold 返回 200" $resp.Status 200
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/compliance/quota?enterpriseId=ENT20240001&year=2024" -Token $tokens['reg']
+Test-Status "/api/compliance/quota 返回 200" $resp.Status 200
+
+$resp = Invoke-Api -Method Put -Uri "$base/api/compliance/threshold" -Body @{ thresholdBp = 2500 } -Token $tokens['ent']
+Test-Status "/api/compliance/threshold 企业角色修改返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/compliance/check" -Body @{ period = '2024-01' } -Token $tokens['reg']
+Test-Status "/api/compliance/check 缺少企业编号返回 400" $resp.Status 400
+
+if ($fingerprint) {
+    $resp = Invoke-Api -Method Get -Uri "$base/api/public/compliance/$fingerprint"
+    Test-Status "/api/public/compliance 免登录返回 200" $resp.Status 200
+}
+
 # ===== 汇总 =====
 $total = $script:passCount + $script:failCount
 Write-Host ""

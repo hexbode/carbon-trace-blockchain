@@ -4,19 +4,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 区块链服务
+ * 区块链服务（薄适配层）：对外契约保持不变，数据全部来自 {@code ChainGateway}。
  */
 public interface BlockchainService {
 
-    /** 全部区块（含交易明细） */
-    List<Map<String, Object>> listBlocks();
+    /** 最近若干个区块（含交易明细） */
+    List<Map<String, Object>> listBlocks(int limit);
 
-    /** 区块链统计：{blockCount, txCount} */
+    /** 链统计：{blockCount, txCount, activeCount, revokedCount, invalidCount, mode, chainAvailable} */
     Map<String, Object> stats();
 
-    /** 将一笔认证交易写入链上（每 4 笔打包成一个区块） */
-    Integer appendTransaction(Map<String, Object> tx);
-
-    /** 移除某个排放记录对应的链上交易（记录被删除时调用） */
-    void removeByEmissionId(String emissionId);
+    /** 链健康信息：模式、可用性、最新区块、合约地址等 */
+    Map<String, Object> health();
 }
