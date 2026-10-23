@@ -20,7 +20,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 报告提交记录服务实现
+ * 报告提交记录服务实现。
+ * 事务边界：审核、重新申请开启事务（报告与排放记录两表联动更新）。
+ * 审核通过与认证联动：certified 时调用认证服务生成/更新认证记录并上链；驳回后支持重新申请（回退 pending）。
  */
 @Service
 public class ReportRecordServiceImpl implements ReportRecordService {
@@ -64,6 +66,7 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         return record;
     }
 
+    /** 审核：结果非 certified/rejected 抛 400；同步更新关联排放记录状态，认证通过则触发认证上链 */
     @Override
     @Transactional
     public ReportRecord audit(String id, Map<String, Object> body) {
@@ -96,6 +99,7 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         return reportRecordMapper.selectById(id);
     }
 
+    /** 认证申请：报告与关联排放记录状态改回 pending，并清空审核信息 */
     @Override
     @Transactional
     public ReportRecord apply(String id) {

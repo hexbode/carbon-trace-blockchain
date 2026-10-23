@@ -82,6 +82,7 @@ public class WebaseErrorMapper {
         return null;
     }
 
+    /** 截断过长文本到 200 字符，防止把整段 revert 原文写进异常消息 */
     private static String summarize(String value) {
         if (value == null) {
             return "";

@@ -32,6 +32,7 @@ public class ChainIntegrityChecker {
         this.certificationRecordMapper = certificationRecordMapper;
     }
 
+    /** 应用就绪后立即对账一次，第一时间暴露链库不一致而非等下一次定时任务 */
     @EventListener(ApplicationReadyEvent.class)
     public void checkOnStartup() {
         check();
@@ -44,6 +45,10 @@ public class ChainIntegrityChecker {
         check();
     }
 
+    /**
+     * 对账主流程：非 webase 或链探活失败直接跳过；否则取链上计数与业务库 valid/revoked 数量比对，
+     * 差额解释为已删除排放记录的作废存证；链被清空而业务库仍有记录时视为严重不一致并告警。
+     */
     public void check() {
         if (!"webase".equals(chainGateway.mode())) {
             log.warn("当前为离线桩模式（stub），链上无真实存证，跳过链上一致性对账。");
@@ -92,6 +97,7 @@ public class ChainIntegrityChecker {
         }
     }
 
+    /** 按认证记录状态统计业务库条数，供与链上对应状态计数逐一比对 */
     private long countByStatus(String status) {
         Long value = certificationRecordMapper.selectCount(new LambdaQueryWrapper<CertificationRecord>()
                 .eq(CertificationRecord::getStatus, status));

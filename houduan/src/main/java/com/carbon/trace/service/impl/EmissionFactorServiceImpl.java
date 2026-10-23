@@ -13,7 +13,8 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * 碳排放因子服务实现
+ * 碳排放因子服务实现。
+ * 无事务边界（单表操作）；新增时自动补主键（当前总数+1）、默认启用状态与更新时间，更新时刷新更新时间。
  */
 @Service
 public class EmissionFactorServiceImpl implements EmissionFactorService {
@@ -46,6 +47,7 @@ public class EmissionFactorServiceImpl implements EmissionFactorService {
         return factor;
     }
 
+    /** 新增因子：主键空时按总数+1 生成，状态默认 active，更新时间默认当日 */
     @Override
     public EmissionFactor create(EmissionFactor factor) {
         if (factor.getId() == null) {

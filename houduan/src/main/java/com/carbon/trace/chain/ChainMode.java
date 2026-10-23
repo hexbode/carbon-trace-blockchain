@@ -10,6 +10,7 @@ public enum ChainMode {
     WEBASE,
     STUB;
 
+    /** 字符串 → 枚举；空白或未知值一律回退 STUB，宁可降级为离线桩也不误选真实链触发连锁异常 */
     public static ChainMode from(String value) {
         if (value == null || value.isBlank()) {
             return STUB;

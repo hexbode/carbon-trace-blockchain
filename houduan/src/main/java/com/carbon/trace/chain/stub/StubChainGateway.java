@@ -58,6 +58,7 @@ public class StubChainGateway implements ChainGateway {
     private volatile int thresholdBp = 2000;
     private volatile int lateReportMonths = 1;
 
+    /** 启动提示：显式声明 stub 无区块/无挖矿/不落盘，避免开发环境被误当作真实链 */
     @PostConstruct
     public void banner() {
         log.warn("============================================================");
@@ -67,6 +68,7 @@ public class StubChainGateway implements ChainGateway {
         log.warn("============================================================");
     }
 
+    /** 认证登记：内存覆盖式写凭证；若同一编号已被 REVOKED 则拒绝重复认证（模拟合约终局约束） */
     @Override
     public ChainCertificate certify(CertifyCommand command) {
         ChainCertificate existing = certs.get(command.getCertId());
@@ -98,6 +100,7 @@ public class StubChainGateway implements ChainGateway {
         return cert;
     }
 
+    /** 监管撤销：仅 VALID → REVOKED，凭证不存在时报 404（模拟合约 revert） */
     @Override
     public void revoke(String certId, String reason) {
         ChainCertificate cert = certs.get(certId);
@@ -110,6 +113,7 @@ public class StubChainGateway implements ChainGateway {
         cert.setReason(reason);
     }
 
+    /** 作废标记：链上不可删除，仅把状态改为 INVALID；未认证过的记录静默忽略（与合约一致） */
     @Override
     public void invalidateByEmissionId(String emissionId, String reason) {
         ChainCertificate cert = certs.get(emissionId);
@@ -123,6 +127,7 @@ public class StubChainGateway implements ChainGateway {
         cert.setReason(reason);
     }
 
+    /** 按电子防伪码精确匹配（去首尾空白、大小写敏感，与 webase 实现口径一致） */
     @Override
     public Optional<ChainCertificate> findByFingerprint(String fingerprint) {
         if (fingerprint == null) {
@@ -132,16 +137,19 @@ public class StubChainGateway implements ChainGateway {
         return certId == null ? Optional.empty() : Optional.ofNullable(certs.get(certId));
     }
 
+    /** 按认证编号查询；编号为空返回空 */
     @Override
     public Optional<ChainCertificate> findByCertId(String certId) {
         return certId == null ? Optional.empty() : Optional.ofNullable(certs.get(certId));
     }
 
+    /** 排放记录编号与认证编号同号，桩模式下与按认证编号查询等价 */
     @Override
     public Optional<ChainCertificate> findByEmissionId(String emissionId) {
         return findByCertId(emissionId);
     }
 
+    /** 按归一化交易哈希反查；桩模式下的哈希为「stub-编号」伪哈希 */
     @Override
     public Optional<ChainCertificate> findByTxHash(String txHash) {
         if (txHash == null) {
@@ -151,12 +159,14 @@ public class StubChainGateway implements ChainGateway {
         return certId == null ? Optional.empty() : Optional.ofNullable(certs.get(certId));
     }
 
+    /** 兼容旧语义：先按防伪码后按交易哈希，与 webase 实现口径一致 */
     @Override
     public Optional<ChainCertificate> findAny(String fingerprintOrTxHash) {
         Optional<ChainCertificate> byFingerprint = findByFingerprint(fingerprintOrTxHash);
         return byFingerprint.isPresent() ? byFingerprint : findByTxHash(fingerprintOrTxHash);
     }
 
+    /** 按编号集合批量取凭证；未命中的编号不出现在结果中 */
     @Override
     public Map<String, ChainCertificate> certificatesByEmissionIds(Collection<String> emissionIds) {
         Map<String, ChainCertificate> result = new HashMap<>();
@@ -172,6 +182,7 @@ public class StubChainGateway implements ChainGateway {
         return result;
     }
 
+    /** 遍历内存凭证按状态计数（total/valid/revoked/invalid） */
     @Override
     public ChainCertCount countCertificates() {
         ChainCertCount count = new ChainCertCount();
@@ -187,16 +198,19 @@ public class StubChainGateway implements ChainGateway {
         return count;
     }
 
+    /** 桩模式没有区块，恒返回 -1（与接口约定「无区块返回 -1」一致） */
     @Override
     public long latestBlockNumber() {
         return -1L;
     }
 
+    /** 桩模式下以内存凭证数近似交易数（仅用于开发展示） */
     @Override
     public long chainTxCount() {
         return certs.size();
     }
 
+    /** 桩模式没有区块，区块浏览恒为空 */
     @Override
     public List<ChainBlockView> listRecentBlocks(int limit) {
         // 桩模式没有区块，区块浏览为空
@@ -205,6 +219,7 @@ public class StubChainGateway implements ChainGateway {
 
     // ---------------- 合规判定（与合约同规则的本地实现，便于离线回归） ----------------
 
+    /** 合规判定：本地按与合约相同的规则逐条复刻，便于离线回归比对两者结果一致 */
     @Override
     public ComplianceResult checkAll(ComplianceInput input) {
         ComplianceResult result = new ComplianceResult();
@@ -254,57 +269,68 @@ public class StubChainGateway implements ChainGateway {
         return result;
     }
 
+    /** 设置企业某年度配额（内存镜像，定标后存储） */
     @Override
     public void setAnnualQuota(String enterpriseId, int year, BigDecimal quota) {
         annualQuota.put(key(enterpriseId, String.valueOf(year)), AmountCodec.toScaled(quota));
     }
 
+    /** 查询企业某年度配额；未配置返回 0 */
     @Override
     public BigDecimal annualQuotaOf(String enterpriseId, int year) {
         Long value = annualQuota.get(key(enterpriseId, String.valueOf(year)));
         return AmountCodec.fromScaled(value == null ? 0L : value);
     }
 
+    /** 同步企业某报告期合计排放量（内存镜像，供环比规则使用） */
     @Override
     public void syncPeriodTotal(String enterpriseId, String period, BigDecimal amount) {
         periodTotal.put(key(enterpriseId, period), AmountCodec.toScaled(amount));
     }
 
+    /** 同步企业某年度累计排放量（内存镜像，供配额规则使用） */
     @Override
     public void syncYearTotal(String enterpriseId, int year, BigDecimal amount) {
         yearTotal.put(key(enterpriseId, String.valueOf(year)), AmountCodec.toScaled(amount));
     }
 
+    /** 记录某企业某排放源最近一次排放因子（内存镜像，供因子一致性规则使用） */
     @Override
     public void rememberFactor(String enterpriseId, String sourceCode, BigDecimal factor) {
         lastFactor.put(key(enterpriseId, sourceCode), AmountCodec.factorToScaled(factor));
     }
 
+    /** 设置环比波动阈值（基点，内存镜像） */
     @Override
     public void setFluctuationThresholdBp(int bp) {
         this.thresholdBp = bp;
     }
 
+    /** 查询环比波动阈值（基点） */
     @Override
     public int fluctuationThresholdBp() {
         return thresholdBp;
     }
 
+    /** 设置迟报判定月数（内存镜像） */
     @Override
     public void setLateReportMonths(int months) {
         this.lateReportMonths = months;
     }
 
+    /** 查询迟报判定月数 */
     @Override
     public int lateReportMonths() {
         return lateReportMonths;
     }
 
+    /** 桩模式恒不可用（不含真实链探活逻辑） */
     @Override
     public boolean available() {
         return false;
     }
 
+    /** 运行模式标识：恒为 stub */
     @Override
     public String mode() {
         return "stub";
@@ -312,10 +338,12 @@ public class StubChainGateway implements ChainGateway {
 
     // ---------------- 内部工具 ----------------
 
+    /** 拼接复合键：企业编号 + 分隔符 + 分类键，防止不同企业同一维度串号 */
     private static String key(String a, String b) {
         return a + "|" + b;
     }
 
+    /** 交易哈希归一化：去空白、转小写、去 0x 前缀（与 webase 实现保持一致） */
     private static String normalize(String value) {
         String v = value.trim().toLowerCase();
         return v.startsWith("0x") ? v.substring(2) : v;
@@ -339,6 +367,7 @@ public class StubChainGateway implements ChainGateway {
         return deadline != 0 && periodYyyymm < deadline;
     }
 
+    /** yyyymm（整数）减 months 个月：按月总量 year*12+(month-1) 换算后回算 yyyymm；month 越界或结果早于第 0 个月时返回 0 */
     private static long minusMonths(long yyyymm, int months) {
         long year = yyyymm / 100;
         long month = yyyymm % 100;

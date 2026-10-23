@@ -9,7 +9,11 @@ import lombok.Data;
 import java.time.LocalDate;
 
 /**
- * 系统用户表
+ * 系统用户表。
+ * 对应表 users，主键 id 为数据库自增。
+ * 业务职责：作为系统的统一登录主体，通过 {@code role} 字段区分企业、审核员、监管员、管理员四类角色；
+ * 各角色通过 {@code enterpriseId}/{@code orgId} 关联所属企业/机构，登录态载荷由 {@code UserContext} 从 JWT 还原。
+ * 字段契约：{@code password} 采用 WRITE_ONLY 序列化策略——仅允许请求体写入（新建/重置），任何接口响应都不再回显密码。
  */
 @Data
 @TableName("users")
@@ -32,13 +36,13 @@ public class User {
     /** 姓名 */
     private String name;
 
-    /** 角色：enterprise/auditor/regulator/admin */
+    /** 角色：enterprise 企业 / auditor 审核员 / regulator 监管员 / admin 管理员；决定菜单与越权拦截范围。 */
     private String role;
 
-    /** 所属企业（企业用户） */
+    /** 所属企业（企业用户）；仅 enterprise 角色填充，关联 enterprises.id。 */
     private String enterpriseId;
 
-    /** 所属机构（审核人员） */
+    /** 所属机构（审核人员）；仅 auditor/regulator 角色填充，关联审核机构或监管机构的 id。 */
     private String orgId;
 
     /** 联系电话 */

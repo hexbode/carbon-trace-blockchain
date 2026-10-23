@@ -31,7 +31,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 碳排放数据记录服务实现
+ * 碳排放数据记录服务实现。
+ * 事务边界：新增填报、删除记录开启事务（涉及排放记录/报告记录/认证记录多表联动）。
+ * 核心职责：
+ *  1. 新增时计算排放量（活动数据×因子，保留 2 位小数）、生成 12 位电子防伪码、同号派生报告记录；
+ *  2. 触发合规判定（链上合约，回退本地规则）与「事务提交后」的合规镜像同步上链；
+ *  3. 删除时按「认证 → 报告 → 排放」顺序清理，随后将链上存证标记作废并重算合计镜像，业务库里同步清理该期告警。
+ * 编号契约：排放记录/报告记录/认证记录三表同号，且编号需避开链上已存在编号（链上只追加不删除）。
  */
 @Service
 public class EmissionRecordServiceImpl implements EmissionRecordService {
@@ -68,6 +74,7 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         this.complianceService = complianceService;
     }
 
+    /** 多条件过滤查询排放记录，按提交时间倒序 */
     @Override
     public List<EmissionRecord> list(String enterpriseId, String period, String sourceCode, String status, String keyword) {
         LambdaQueryWrapper<EmissionRecord> wrapper = new LambdaQueryWrapper<>();
@@ -92,6 +99,7 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         return emissionRecordMapper.selectList(wrapper);
     }
 
+    /** 按编号查询详情，不存在抛 404 */
     @Override
     public EmissionRecord getById(String id) {
         EmissionRecord record = emissionRecordMapper.selectById(id);

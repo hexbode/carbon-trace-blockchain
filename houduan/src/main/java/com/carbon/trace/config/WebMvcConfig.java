@@ -26,6 +26,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
         this.authInterceptor = authInterceptor;
     }
 
+    /**
+     * 注册鉴权拦截器并配置放行白名单：登录、公共查询端与公众免登录的认证查询/校验接口不拦截。
+     */
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(authInterceptor)
@@ -39,6 +42,9 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 );
     }
 
+    /**
+     * 全局 CORS 放行：允许任意来源（携带凭据），支持 GET/POST/PUT/DELETE/OPTIONS，预检缓存有效期 1 小时。
+     */
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")

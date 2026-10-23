@@ -51,6 +51,7 @@ public class LegacyChainImporter implements ApplicationRunner {
         this.certificationRecordMapper = certificationRecordMapper;
     }
 
+    /** 迁移主流程：校验链模式 → 读取旧链防伪码兜底 → 逐条写链（已撤销补 revoke）→ 汇总计数日志；单条失败只告警不中断 */
     @Override
     public void run(ApplicationArguments args) {
         if (!"webase".equals(chainGateway.mode())) {

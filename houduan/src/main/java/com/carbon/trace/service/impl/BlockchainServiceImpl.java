@@ -16,6 +16,8 @@ import java.util.Map;
 
 /**
  * 区块链服务实现：全部数据来自链网关（真实链或离线桩）。
+ * 本类只是把链网关返回的结构型数据组装成前端友好的 Map 结构，不持久化、不写链；
+ * 链不可达时统计接口降级为 0，健康接口捕获异常并在 notice 中透出原因，避免整体 500。
  */
 @Service
 public class BlockchainServiceImpl implements BlockchainService {

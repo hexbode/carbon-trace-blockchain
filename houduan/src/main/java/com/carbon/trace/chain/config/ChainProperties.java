@@ -31,10 +31,12 @@ public class ChainProperties {
 
     private Migration migration = new Migration();
 
+    /** mode 字符串 → 枚举（未知值安全回退 STUB） */
     public ChainMode chainMode() {
         return ChainMode.from(mode);
     }
 
+    /** 是否处于真实联盟链模式（webase） */
     public boolean isWebaseMode() {
         return chainMode() == ChainMode.WEBASE;
     }

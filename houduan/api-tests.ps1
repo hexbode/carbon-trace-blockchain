@@ -10,6 +10,8 @@ $script:passCount = 0
 $script:failCount = 0
 $script:failures = New-Object System.Collections.Generic.List[string]
 
+# 统一的 HTTP 请求封装：支持 GET/POST 等，可携带 Bearer Token 与 JSON 请求体。
+# 返回 @{ Status = HTTP 状态码; Body = 响应体文本 }，异常时尽量解析出状态码，无法解析则返回 -1。
 function Invoke-Api {
     param([string]$Method, [string]$Uri, [object]$Body, [string]$Token)
     try {
@@ -37,6 +39,7 @@ function Invoke-Api {
     }
 }
 
+# 断言 HTTP 状态码是否等于预期值，输出 PASS/FAIL 并累计计数。
 function Test-Status {
     param([string]$Name, [int]$Actual, [int]$Expected)
     if ($Actual -eq $Expected) {
@@ -49,6 +52,7 @@ function Test-Status {
     }
 }
 
+# 断言布尔条件是否为真（用于校验响应体字段等非状态码类结果）。
 function Test-True {
     param([string]$Name, [bool]$Condition, [string]$Detail = '')
     if ($Condition) {

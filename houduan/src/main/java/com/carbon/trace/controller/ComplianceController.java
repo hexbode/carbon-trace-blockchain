@@ -24,7 +24,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 合规判定接口：判定由链上智能合约执行，此处负责聚合入参、解读结果与治理参数管理。
+ * 合规判定接口：排放合规性由链上智能合约执行判定，本控制器负责聚合入参、解读判定结果
+ * 以及维护链上治理参数（年度配额与判定阈值）。
+ *
+ * 暴露接口：
+ *   POST /api/compliance/check             试算判定（不落库），body {enterpriseId,period,sourceCode,activityData,factor}；
+ *   GET  /api/compliance/certificate/{certId}  证书的链上合规快照；
+ *   GET  /api/compliance/quota             查询企业某年度配额（参数 enterpriseId、year）；
+ *   PUT  /api/compliance/quota             设置年度配额（写合约，body {enterpriseId,year,quota}）；
+ *   GET  /api/compliance/threshold         查询治理参数（环比阈值、迟报月数）；
+ *   PUT  /api/compliance/threshold         修改治理参数（写合约，body {thresholdBp?, lateReportMonths?}）。
+ * 角色约定：查询登录即可；写合约（配额、阈值）仅 regulator / admin（requireRegulatorRole）。
  */
 @RestController
 @RequestMapping("/api/compliance")
@@ -37,7 +47,8 @@ public class ComplianceController {
     }
 
     /**
-     * 试算判定（不落库）：body {enterpriseId, period, sourceCode, activityData, factor}
+     * 试算判定（不落库）：body {enterpriseId, period, sourceCode, activityData, factor}。
+     * 返回合规旗标、环比增量、配额与逐条规则明细；企业编号或报告期为空时返回 400。
      */
     @PostMapping("/check")
     public Map<String, Object> check(@RequestBody Map<String, Object> body) {
@@ -52,7 +63,7 @@ public class ComplianceController {
         return describe(result);
     }
 
-    /** 证书的链上合规快照 */
+    /** 按证书编号返回该证书上链时的合规判定快照（旗标 + 规则明细 + 是否合规） */
     @GetMapping("/certificate/{certId}")
     public Map<String, Object> certificate(@PathVariable String certId) {
         Map<String, Object> result = describeFlags(complianceService.certificateFlags(certId));
@@ -60,6 +71,7 @@ public class ComplianceController {
         return result;
     }
 
+    /** 查询企业某年度碳排放配额：参数 enterpriseId、year，返回 {enterpriseId, year, quota} */
     @GetMapping("/quota")
     public Map<String, Object> quota(@RequestParam String enterpriseId, @RequestParam int year) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -69,7 +81,7 @@ public class ComplianceController {
         return result;
     }
 
-    /** 设置年度配额（合约写）：body {enterpriseId, year, quota} */
+    /** 设置年度配额（写合约）：body {enterpriseId, year, quota}；仅监管/管理员；企业编号或年份缺失返回 400 */
     @PutMapping("/quota")
     public Map<String, Object> setQuota(@RequestBody Map<String, Object> body) {
         requireRegulatorRole();
@@ -83,12 +95,13 @@ public class ComplianceController {
         return quota(enterpriseId, year);
     }
 
+    /** 查询链上治理参数：环比波动阈值（基点/百分比）与迟报月数 */
     @GetMapping("/threshold")
     public Map<String, Object> threshold() {
         return describeThreshold();
     }
 
-    /** 修改可治理参数（合约写）：body {thresholdBp?, lateReportMonths?} */
+    /** 修改可治理参数（写合约）：body {thresholdBp?, lateReportMonths?} 至少提供其一；仅监管/管理员 */
     @PutMapping("/threshold")
     public Map<String, Object> setThreshold(@RequestBody Map<String, Object> body) {
         requireRegulatorRole();
@@ -108,6 +121,7 @@ public class ComplianceController {
 
     // ---------------- 内部 ----------------
 
+    /** 组装治理参数响应：环比阈值（基点 + 百分比文本）与迟报月数 */
     private Map<String, Object> describeThreshold() {
         Map<String, Object> result = new LinkedHashMap<>();
         int bp = complianceService.fluctuationThresholdBp();
@@ -117,6 +131,7 @@ public class ComplianceController {
         return result;
     }
 
+    /** 把 ComplianceResult 展开为响应 Map：旗标/是否合规/环比增量/配额/累计排放/阈值/规则明细等 */
     private Map<String, Object> describe(ComplianceResult result) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("flags", result.getFlags());
@@ -134,6 +149,7 @@ public class ComplianceController {
         return body;
     }
 
+    /** 把合规旗标 int 展开为响应 Map（flags 为负表示无有效快照，compliant 置 null） */
     private Map<String, Object> describeFlags(int flags) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("flags", flags);
@@ -142,6 +158,7 @@ public class ComplianceController {
         return body;
     }
 
+    /** 把合规旗标展开为逐条规则明细（规则编码/类型/中文标签/级别），供前端列表展示 */
     private List<Map<String, Object>> items(int flags) {
         List<Map<String, Object>> items = new ArrayList<>();
         for (ComplianceFlags.Rule rule : ComplianceFlags.rules(flags)) {
@@ -160,10 +177,12 @@ public class ComplianceController {
         return BigDecimal.valueOf(bp).divide(BigDecimal.valueOf(100), 2, java.math.RoundingMode.HALF_UP) + "%";
     }
 
+    /** 对象安全转 String：null 返回 null */
     private static String str(Object value) {
         return value == null ? null : String.valueOf(value);
     }
 
+    /** 对象安全转 BigDecimal：缺失或非法时返回 null（由调用方继续校验必填） */
     private static BigDecimal decimal(Object value) {
         if (value == null || !StringUtils.hasText(String.valueOf(value))) {
             return null;
@@ -175,6 +194,7 @@ public class ComplianceController {
         }
     }
 
+    /** 对象安全转 Integer：缺失或非法时返回 null */
     private static Integer integer(Object value) {
         if (value == null || !StringUtils.hasText(String.valueOf(value))) {
             return null;

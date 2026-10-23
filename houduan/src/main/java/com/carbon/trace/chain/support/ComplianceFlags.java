@@ -43,6 +43,7 @@ public final class ComplianceFlags {
         return rules;
     }
 
+    /** flags 是否为「无任何规则命中」；合规判定统一以 0 为通过口径 */
     public static boolean compliant(int flags) {
         return flags == 0;
     }

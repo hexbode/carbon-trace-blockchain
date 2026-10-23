@@ -53,6 +53,7 @@ public class WebaseBlockDto {
     @JsonProperty("transactions")
     private JsonNode transactions;
 
+    /** 区块高度：解析 number 字段（可能是十进制或 0x 十六进制），失败返回 -1 */
     public Long index() {
         return TransHandleReceipt.parseNumber(number);
     }
@@ -66,6 +67,7 @@ public class WebaseBlockDto {
         return ts > 1_000_000_000_000L ? ts : ts * 1000L;
     }
 
+    /** 区块 nonce 的数值形式（2.x/3.x 字段含义略有差异，仅作展示） */
     public Long nonceLong() {
         return TransHandleReceipt.parseNumber(nonce);
     }

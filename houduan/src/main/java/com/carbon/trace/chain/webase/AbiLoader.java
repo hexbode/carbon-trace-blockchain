@@ -26,6 +26,7 @@ public class AbiLoader {
 
     private final ResourceLoader resourceLoader;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** 按 location（classpath:/file: 前缀）的 ABI 缓存；ABI 内容不可变，缓存一次即可 */
     private final Map<String, JsonNode> cache = new ConcurrentHashMap<>();
 
     public AbiLoader(ResourceLoader resourceLoader) {
@@ -40,6 +41,7 @@ public class AbiLoader {
         return cache.computeIfAbsent(location, this::read);
     }
 
+    /** 真正读取并解析 ABI 文件；只接受 JSON 数组（Solidity ABI 顶层即函数/事件数组），否则视为格式错误 */
     private JsonNode read(String location) {
         Resource resource = location.startsWith("classpath:")
                 ? new ClassPathResource(location.substring("classpath:".length()))

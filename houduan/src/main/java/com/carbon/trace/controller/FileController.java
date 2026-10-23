@@ -44,7 +44,10 @@ public class FileController {
         this.avatarDir = Paths.get(uploadDir).toAbsolutePath().normalize().resolve("avatar");
     }
 
-    /** 上传头像：返回可直接访问的图片地址 */
+    /**
+     * 上传头像：保存到本地磁盘 avatar 子目录，返回可直接通过 /uploads/avatar/** 访问的相对地址。
+     * 校验：文件为空、超过 5MB 或扩展名不在白名单内均返回 400；写入失败返回 500。
+     */
     @PostMapping("/avatar")
     public Map<String, Object> uploadAvatar(@RequestParam("file") MultipartFile file) {
         if (file == null || file.isEmpty()) {

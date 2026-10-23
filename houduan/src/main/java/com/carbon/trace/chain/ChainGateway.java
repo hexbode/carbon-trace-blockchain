@@ -74,22 +74,31 @@ public interface ChainGateway {
     /** 一次调用完成全部链上规则判定 */
     ComplianceResult checkAll(ComplianceInput input);
 
+    /** 设置企业某年度配额（写链，配额规则的阈值来源） */
     void setAnnualQuota(String enterpriseId, int year, BigDecimal quota);
 
+    /** 查询企业某年度配额；未配置返回 0 */
     BigDecimal annualQuotaOf(String enterpriseId, int year);
 
+    /** 同步企业某报告期合计排放量到链上（环比规则依赖上次报告期数据） */
     void syncPeriodTotal(String enterpriseId, String period, BigDecimal amount);
 
+    /** 同步企业某年度累计排放量到链上（配额规则依赖） */
     void syncYearTotal(String enterpriseId, int year, BigDecimal amount);
 
+    /** 记录某企业某排放源最近一次使用的排放因子（因子一致性规则依赖） */
     void rememberFactor(String enterpriseId, String sourceCode, BigDecimal factor);
 
+    /** 设置环比波动阈值（基点，1bp = 0.01%） */
     void setFluctuationThresholdBp(int bp);
 
+    /** 查询环比波动阈值（基点） */
     int fluctuationThresholdBp();
 
+    /** 设置迟报判定月数（报告期早于当前月份减去该月数即视为迟报） */
     void setLateReportMonths(int months);
 
+    /** 查询迟报判定月数 */
     int lateReportMonths();
 
     // ---------------- 健康 ----------------

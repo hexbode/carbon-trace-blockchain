@@ -9,7 +9,12 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * 碳排放数据记录表
+ * 碳排放数据记录表。
+ * 对应表 emission_records，主键 id 为业务生成的排放记录编号（IdType.INPUT）。
+ * 业务职责：企业填报的碳排放核算明细（活动数据×排放因子），是认证流程的源头数据；
+ * 记录随状态机流转：pending 待认证 → certified 已认证 / rejected 已驳回，认证通过后转入 certification_records 存证。
+ * 字段契约：{@code amount} 由活动数据与排放因子计算而来（金额型计算逻辑见 Service 层），
+ * 并配套 {@code fingerprint} 防伪码用于后续链上存证核验。
  */
 @Data
 @TableName("emission_records")
@@ -43,13 +48,13 @@ public class EmissionRecord {
     /** 本次核算使用的排放因子 */
     private BigDecimal emissionFactor;
 
-    /** 碳排放量 = 活动数据 × 排放因子 */
+    /** 碳排放量 = 活动数据 × 排放因子；量纲与 {@code unit} 一致，业务层负责精度/舍入约定。 */
     private BigDecimal amount;
 
     /** 排放量单位 */
     private String unit;
 
-    /** 认证状态：certified / pending / rejected */
+    /** 认证状态：certified 已认证 / pending 待认证 / rejected 已驳回（状态机起点为 pending）。 */
     private String status;
 
     /** 电子防伪码 */

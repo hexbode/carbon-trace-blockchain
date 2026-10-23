@@ -35,6 +35,7 @@ public class TransHandleReceipt {
     @JsonProperty("gasUsed")
     private String gasUsed;
 
+    /** 交易是否成功：statusOK=false 直接判失败；否则按 status 比对 0x0/0x00/0 判成功 */
     public boolean successful() {
         if (Boolean.FALSE.equals(statusOK)) {
             return false;
@@ -50,6 +51,7 @@ public class TransHandleReceipt {
         return s.equals("0");
     }
 
+    /** 出块高度的数值形式；无法解析时返回 -1 */
     public long blockNumberLong() {
         return parseNumber(blockNumber);
     }

@@ -25,11 +25,13 @@ public class PasswordMigrationRunner implements ApplicationRunner {
         this.userMapper = userMapper;
     }
 
+    /** 应用启动后执行：遍历全部账号，仅对仍是明文的密码做一次性哈希迁移（幂等，重复启动无副作用） */
     @Override
     public void run(ApplicationArguments args) {
         List<User> users = userMapper.selectList(null);
         int migrated = 0;
         for (User user : users) {
+            // 密码为空或已带 {bcrypt} 前缀的直接跳过，保证迁移幂等
             if (user.getPassword() == null || !PasswordHasher.needsMigration(user.getPassword())) {
                 continue;
             }

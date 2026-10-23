@@ -19,7 +19,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 公共查询端接口（无需登录）
+ * 公共查询端接口：无需登录，供公众浏览企业、证书与合规快照（位于拦截器放行白名单）。
+ *
+ * 暴露接口：
+ *   GET /api/public/enterprises                   企业列表；
+ *   GET /api/public/enterprise-emissions          企业排放概览；
+ *   GET /api/public/qr-resolve                    二维码内容解析（按防伪码返回证书）；
+ *   GET /api/public/sample-certs                  固定示例证书（供查询页展示示例防伪码）；
+ *   GET /api/public/compliance/{fingerprint}      按防伪码返回上链时记录的合规判定快照。
+ * 角色约定：全部接口免登录。
  */
 @RestController
 @RequestMapping("/api/public")
@@ -40,13 +48,13 @@ public class PublicController {
         this.complianceService = complianceService;
     }
 
-    /** 企业列表 */
+    /** 企业列表：无过滤条件返回全部企业，供公共端浏览与检索 */
     @GetMapping("/enterprises")
     public List<Enterprise> enterprises() {
         return enterpriseService.list(null, null);
     }
 
-    /** 企业排放概览 */
+    /** 企业排放概览：各企业排放总量等聚合数据，供公共端图表展示 */
     @GetMapping("/enterprise-emissions")
     public List<Map<String, Object>> enterpriseEmissions() {
         return statsService.publicEnterpriseEmissions();

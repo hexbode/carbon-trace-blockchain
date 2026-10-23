@@ -34,13 +34,13 @@ public class TransHandleRequest {
     private String funcName;
 
     /**
-     * 入参列表，按合约函数参数顺序。
+     * 入参列表，按合约函数参数顺序。由 WebaseChainGateway#encodeFuncParams 统一转换。
      *
-     * WeBASE 3.x 要求每个元素是参数的 JSON 字面量字符串：
-     *  - 数字 → "1000"；布尔 → "true"；
-     *  - 字符串 → "\"abc\""（带引号）；
-     *  - 数组 → "[\"0x...\"]"。
-     * 由 WebaseChainGateway#encodeFuncParams 统一转换。
+     * WeBASE 3.x 的 funcParam 是 List&lt;String&gt;，每个元素按「原文」参与 ABI 编码
+     * （实测结论：字符串不能加引号，否则引号会被一并写进链上数据）：
+     *  - 数字 → 1000；布尔 → true；
+     *  - 字符串 → 直接给内容，如 CR000001；
+     *  - 数组 → JSON 数组文本，形如 ["0x..."]（元素必须是 JSON 字符串）。
      */
     private List<String> funcParam = new ArrayList<>();
 

@@ -22,7 +22,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 用户管理接口
+ * 用户管理接口：账号的增删改查、密码重置/修改与账号设置维护。
+ *
+ * 暴露接口：
+ *   GET    /api/users                         用户列表（可按 username / role 过滤）；
+ *   POST   /api/users                         新建用户；
+ *   PUT    /api/users/{id}                    修改用户资料；
+ *   DELETE /api/users/{id}                    删除用户；
+ *   POST   /api/users/{id}/reset-password     重置密码为初始值 123456；
+ *   PUT    /api/users/{id}/password           修改密码（body {oldPassword, newPassword}）；
+ *   GET    /api/users/{id}/settings           查询账号设置（4 个布尔开关）；
+ *   PUT    /api/users/{id}/settings           更新账号设置。
+ * 角色约定：新增、删除、重置密码等管理操作仅 regulator / admin；修改资料、改密、账号设置
+ * 允许本人操作（requireSelfOrManager）；用户目录含联系方式等敏感字段，仅监管/管理员可查。
  */
 @RestController
 @RequestMapping("/api/users")
@@ -36,6 +48,7 @@ public class UserController {
         this.userSettingsService = userSettingsService;
     }
 
+    /** 用户列表：可按 username、role 过滤；目录含联系方式等敏感字段，仅监管/管理员可查（否则 403） */
     @GetMapping
     public List<User> list(@RequestParam(required = false) String username,
                            @RequestParam(required = false) String role) {
@@ -44,18 +57,21 @@ public class UserController {
         return userService.list(username, role);
     }
 
+    /** 新建用户，body 为 User 实体（含 username/password/role/name 等字段）；仅监管/管理员可执行 */
     @PostMapping
     public User create(@RequestBody User user) {
         requireManagerRole();
         return userService.create(user);
     }
 
+    /** 修改用户资料：监管/管理员可改任意用户，普通用户仅能改本人（否则 403） */
     @PutMapping("/{id}")
     public User update(@PathVariable Integer id, @RequestBody User user) {
         requireSelfOrManager(id);
         return userService.update(id, user);
     }
 
+    /** 删除用户：仅监管/管理员可执行 */
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable Integer id) {
         requireManagerRole();
@@ -63,14 +79,14 @@ public class UserController {
         return Collections.emptyMap();
     }
 
-    /** 重置密码为 123456 */
+    /** 重置指定账号密码为初始值 123456（用于用户忘记密码时管理员代操作）；仅监管/管理员可执行 */
     @PostMapping("/{id}/reset-password")
     public User resetPassword(@PathVariable Integer id) {
         requireManagerRole();
         return userService.resetPassword(id);
     }
 
-    /** 修改密码：body {oldPassword, newPassword}，旧密码不符返回 400 */
+    /** 修改密码：body {oldPassword, newPassword}；本人或监管/管理员可操作，旧密码校验失败返回 400 */
     @PutMapping("/{id}/password")
     public Map<String, Object> changePassword(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
         requireSelfOrManager(id);
@@ -78,20 +94,21 @@ public class UserController {
         return Collections.emptyMap();
     }
 
-    /** 获取账号设置（返回 4 个布尔开关） */
+    /** 查询账号设置：返回 4 个布尔开关（提醒/订阅类偏好）；本人或监管/管理员可查看 */
     @GetMapping("/{id}/settings")
     public Map<String, Object> getSettings(@PathVariable Integer id) {
         requireSelfOrManager(id);
         return userSettingsService.getSettings(id);
     }
 
-    /** 更新账号设置 */
+    /** 更新账号设置，body 为 4 个布尔开关字段；本人或监管/管理员可修改 */
     @PutMapping("/{id}/settings")
     public Map<String, Object> updateSettings(@PathVariable Integer id, @RequestBody Map<String, Object> body) {
         requireSelfOrManager(id);
         return userSettingsService.updateSettings(id, body);
     }
 
+    /** 安全地把请求体字段转字符串：字段缺失返回 null */
     private String str(Object value) {
         return value == null ? null : String.valueOf(value);
     }

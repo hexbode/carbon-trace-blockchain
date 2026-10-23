@@ -67,14 +67,17 @@ public class WebaseClient {
         return base + context + suffix;
     }
 
+    /** POST 指定路径并解析响应（用于 /trans/handle、/trans/handleWithSign 等写/只读调用） */
     public JsonNode post(String path, Object body) {
         return exchange(HttpMethod.POST, url(path), body);
     }
 
+    /** GET 指定路径并解析响应（用于区块/交易回执/统计等查询） */
     public JsonNode get(String path) {
         return exchange(HttpMethod.GET, url(path), null);
     }
 
+    /** 统一发起 HTTP 请求：2xx 解析为 JsonNode，其余按错误类型归类映射为业务异常或 503 */
     private JsonNode exchange(HttpMethod method, String url, Object body) {
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -109,6 +112,7 @@ public class WebaseClient {
         return TextNode.valueOf(trimmed);
     }
 
+    /** 截断过长响应文本到 200 字符，避免把整段错误写进日志或异常消息 */
     private static String summarize(String value) {
         return value.length() <= 200 ? value : value.substring(0, 200) + "...";
     }

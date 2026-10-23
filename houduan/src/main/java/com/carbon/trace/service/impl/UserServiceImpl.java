@@ -23,7 +23,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 用户服务实现（含登录）
+ * 用户服务实现（含登录）。
+ * 事务边界：仅删除用户开启事务（先清账号设置避免外键约束，再删用户）；其余单表写操作依赖 MyBatis-Plus 默认自动提交。
+ * 安全设计：更新走白名单防止提权；登录校验「账号+密码+角色+状态」四要素，失败按内存计数锁定（重启即解锁）；
+ * 密码统一走 BCrypt（兼容迁移前的明文），响应不回显密码。
  */
 @Service
 public class UserServiceImpl implements UserService {
@@ -35,8 +38,10 @@ public class UserServiceImpl implements UserService {
     /** 达到上限后的锁定时长（毫秒） */
     private static final long LOCK_MILLIS = 5 * 60_000L;
 
+    /** 账号 → 登录失败计数与锁定截止时间（内存态，重启清空） */
     private final Map<String, LoginFail> loginFails = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** 单个账号的登录失败计数与锁定截止时间快照 */
     private record LoginFail(int count, long lockedUntil) {
     }
 
@@ -139,6 +144,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User resetPassword(Integer id) {
+        // 管理员重置：写入统一默认密码，并解除该账号的登录失败暂时锁定
         User user = getById(id);
         user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
         userMapper.updateById(user);
@@ -163,6 +169,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User findByUsername(String username) {
+        // 空账号直接返回 null（登录/去重调用方需自行处理不存在场景）
         if (!StringUtils.hasText(username)) {
             return null;
         }
@@ -203,6 +210,7 @@ public class UserServiceImpl implements UserService {
         return result;
     }
 
+    /** 记录一次登录失败：累加计数，达到上限后设置锁定截止时间；锁定到期后由 login 校验逻辑放行 */
     private void recordLoginFailure(String username, LoginFail fail) {
         if (username == null) {
             return;

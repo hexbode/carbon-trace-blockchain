@@ -33,6 +33,7 @@ public class StubChainSeeder implements ApplicationRunner {
         this.certificationRecordMapper = certificationRecordMapper;
     }
 
+    /** 启动时把业务库已有认证记录逐条灌入桩；已撤销记录补一条 revoke，单条失败不阻断其余 */
     @Override
     public void run(ApplicationArguments args) {
         List<CertificationRecord> records = certificationRecordMapper.selectList(null);

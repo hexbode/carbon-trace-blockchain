@@ -62,6 +62,7 @@ public class AlertServiceImpl implements AlertService {
         this.complianceService = complianceService;
     }
 
+    /** 按级别、状态过滤查询告警，按触发时间倒序 */
     @Override
     public List<Alert> list(String level, String status) {
         LambdaQueryWrapper<Alert> wrapper = new LambdaQueryWrapper<>();
@@ -75,6 +76,7 @@ public class AlertServiceImpl implements AlertService {
         return alertMapper.selectList(wrapper);
     }
 
+    /** 按编号查询告警，不存在抛 404 */
     @Override
     public Alert getById(String id) {
         Alert alert = alertMapper.selectById(id);
@@ -84,6 +86,7 @@ public class AlertServiceImpl implements AlertService {
         return alert;
     }
 
+    /** 处理告警：状态置为 resolved */
     @Override
     public Alert resolve(String id) {
         Alert alert = getById(id);
@@ -321,7 +324,7 @@ public class AlertServiceImpl implements AlertService {
                 .stripTrailingZeros().toPlainString();
     }
 
-    /** 生成告警编号：ALT + 3 位序号，跳过已占用的编号 */
+    /** 生成告警编号：ALT + 3 位序号；基于总数递增，并循环跳过已被占用的编号 */
     private String nextAlertId() {
         long seq = alertMapper.selectCount(null);
         String id;

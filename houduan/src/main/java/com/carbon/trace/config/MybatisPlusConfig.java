@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class MybatisPlusConfig {
 
+    /** 组装 MyBatis-Plus 拦截器链并注册 MySQL 方言分页插件（当前列表接口未启用分页，保留以备后续功能使用） */
     @Bean
     public MybatisPlusInterceptor mybatisPlusInterceptor() {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();

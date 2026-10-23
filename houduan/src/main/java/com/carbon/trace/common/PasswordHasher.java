@@ -10,8 +10,10 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
  */
 public final class PasswordHasher {
 
+    /** 密文前缀，用于区分 {bcrypt} 哈希与历史遗留明文 */
     private static final String PREFIX = "{bcrypt}";
 
+    /** 全局复用的 BCrypt 编码器，encode 与 matches 共用同一实例保证结果一致 */
     private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
 
     private PasswordHasher() {

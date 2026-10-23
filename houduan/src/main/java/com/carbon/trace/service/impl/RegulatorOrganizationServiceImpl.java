@@ -13,7 +13,9 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * 监管机构服务实现
+ * 监管机构服务实现。
+ * 无事务边界（单表操作）；新增/更新前先做必填字段前置校验（拦截 400 而非让 SQL 约束以 500 暴露），
+ * 新增时编号空则按「REG + 3 位序号」生成，成立时间默认当日。
  */
 @Service
 public class RegulatorOrganizationServiceImpl implements RegulatorOrganizationService {
@@ -43,6 +45,7 @@ public class RegulatorOrganizationServiceImpl implements RegulatorOrganizationSe
         return organization;
     }
 
+    /** 新增监管机构：先必填校验，再补编号/状态/成立时间默认值后落库 */
     @Override
     public RegulatorOrganization create(RegulatorOrganization organization) {
         validateRequired(organization);

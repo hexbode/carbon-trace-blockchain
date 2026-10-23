@@ -61,6 +61,7 @@ public class CertificationServiceImpl implements CertificationService {
         this.txLocator = txLocator;
     }
 
+    /** 按企业、状态、关键字过滤查询；链表数据仅从本地缓存回填交易哈希/区块，绝不逐条回链（避免超时） */
     @Override
     public List<CertificationRecord> list(String enterpriseId, String status, String keyword) {
         LambdaQueryWrapper<CertificationRecord> wrapper = new LambdaQueryWrapper<>();
@@ -83,6 +84,7 @@ public class CertificationServiceImpl implements CertificationService {
         return list;
     }
 
+    /** 单条详情：查询后实时回填链上防伪码/交易哈希/区块信息 */
     @Override
     public CertificationRecord getById(String id) {
         CertificationRecord record = certificationRecordMapper.selectById(id);
@@ -110,6 +112,7 @@ public class CertificationServiceImpl implements CertificationService {
         return record;
     }
 
+    /** 公共端固定示例证书：无参、固定 3 张，公众无法借此遍历其他认证记录 */
     @Override
     public List<CertificationRecord> listSamples() {
         // 固定返回 3 张演示证书，接口无参数，公众无法借此遍历其他认证记录
@@ -142,6 +145,7 @@ public class CertificationServiceImpl implements CertificationService {
         return record;
     }
 
+    /** 核验：以链上存证为唯一依据，返回 {valid, msg, cert}，已撤销/已作废仍在 cert 中回传供前端展示 */
     @Override
     public Map<String, Object> verify(String hash) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -192,6 +196,7 @@ public class CertificationServiceImpl implements CertificationService {
         return result;
     }
 
+    /** 认证通过：生成/更新认证记录（三表同号），构造上链命令并在事务提交后写链 */
     @Override
     @Transactional
     public CertificationRecord certify(ReportRecord report) {
@@ -245,6 +250,7 @@ public class CertificationServiceImpl implements CertificationService {
 
     // ---------------- 内部工具 ----------------
 
+    /** 按排放编号反查认证记录（排放编号为空返回 null）；三表同号因此等价于按记录主键查找 */
     private CertificationRecord findRecordByEmissionId(String emissionId) {
         if (!StringUtils.hasText(emissionId)) {
             return null;

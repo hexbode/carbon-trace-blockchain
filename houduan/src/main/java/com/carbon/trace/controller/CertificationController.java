@@ -19,7 +19,16 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 认证记录接口
+ * 认证记录接口：碳排放认证记录的查询、防伪码核验与撤销。
+ *
+ * 暴露接口：
+ *   GET    /api/certifications                               认证记录列表（可按企业/状态/关键字过滤）；
+ *   GET    /api/certifications/{id}                          单条认证记录；
+ *   GET    /api/certifications/by-fingerprint/{fingerprint}  按电子防伪码精确查询（公共免登录）；
+ *   POST   /api/certifications/verify                        校验防伪码 / 交易哈希（公共免登录，body {hash}）；
+ *   POST   /api/certifications/{id}/revoke                   撤销认证（body {reason, detail}）。
+ * 角色约定：列表/详情登录即可，企业端仅见本企业记录（UserScopes）；撤销仅 regulator / admin；
+ * by-fingerprint 与 verify 位于拦截器放行白名单，供公众扫码核验。
  */
 @RestController
 @RequestMapping("/api/certifications")
@@ -31,6 +40,7 @@ public class CertificationController {
         this.certificationService = certificationService;
     }
 
+    /** 认证记录列表：企业端强制只看本企业（忽略传入 enterpriseId），其他角色按状态/关键字过滤 */
     @GetMapping
     public List<CertificationRecord> list(@RequestParam(required = false) String enterpriseId,
                                           @RequestParam(required = false) String status,
@@ -40,19 +50,20 @@ public class CertificationController {
         return certificationService.list(enterpriseId, status, keyword);
     }
 
-    /** 按电子防伪码精确查询（公共端；不再支持按认证编号查询） */
+    /** 按电子防伪码精确查询（公共端，免登录；不再支持按认证编号查询） */
     @GetMapping("/by-fingerprint/{fingerprint}")
     public CertificationRecord getByFingerprint(@PathVariable String fingerprint) {
         return certificationService.getByFingerprint(fingerprint);
     }
 
-    /** 校验防伪码 / 交易哈希：body {hash} */
+    /** 校验防伪码 / 交易哈希（公共端，免登录）：body {hash}，凡防伪码与交易哈希均按 hash 字段传入 */
     @PostMapping("/verify")
     public Map<String, Object> verify(@RequestBody Map<String, Object> body) {
         Object hash = body.get("hash");
         return certificationService.verify(hash == null ? null : String.valueOf(hash));
     }
 
+    /** 查询单条认证记录：企业端仅能查看归属本企业的记录，越权返回 403 */
     @GetMapping("/{id}")
     public CertificationRecord get(@PathVariable String id) {
         CertificationRecord record = certificationService.getById(id);
@@ -61,7 +72,7 @@ public class CertificationController {
         return record;
     }
 
-    /** 撤销认证：body {reason, detail} */
+    /** 撤销认证：body {reason, detail}（撤销原因与说明）；仅监管/管理员可执行 */
     @PostMapping("/{id}/revoke")
     public CertificationRecord revoke(@PathVariable String id, @RequestBody Map<String, Object> body) {
         requireRegulatorRole();

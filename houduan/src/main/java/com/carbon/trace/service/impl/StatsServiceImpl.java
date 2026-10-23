@@ -27,7 +27,10 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 统计服务实现（数据量小，直接在内存中聚合）
+ * 统计服务实现（数据量小，直接在内存中聚合）。
+ * 面向各端首页图表，按角色分四个区块（监管端/企业端/审核端/公共端）从各 Mapper 全量读取后在内存聚合，
+ * 不写库、不写链；金额统一经 {@link #scale} 保留 2 位小数，占比经 {@link #percent} 保留 1 位小数。
+ * 趋势类指标固定采用 2024 年 12 个月维度（{@code MONTHS_2024}），月份缺数补 0。
  */
 @Service
 public class StatsServiceImpl implements StatsService {
@@ -450,6 +453,7 @@ public class StatsServiceImpl implements StatsService {
 
     // ==================== 私有工具方法 ====================
 
+    /** 企业编号 → 企业对象索引，供按企业归属聚合时快速反查 */
     private Map<String, Enterprise> toEnterpriseMap(List<Enterprise> enterprises) {
         Map<String, Enterprise> map = new LinkedHashMap<>();
         for (Enterprise enterprise : enterprises) {
@@ -458,6 +462,7 @@ public class StatsServiceImpl implements StatsService {
         return map;
     }
 
+    /** 按 2024 年 12 个月生成初始值为 0 的月度桶 */
     private Map<String, BigDecimal> emptyMonthMap() {
         Map<String, BigDecimal> map = new LinkedHashMap<>();
         for (String month : MONTHS_2024) {
@@ -466,10 +471,12 @@ public class StatsServiceImpl implements StatsService {
         return map;
     }
 
+    /** 统计状态匹配的记录条数 */
     private long countStatus(List<EmissionRecord> records, String status) {
         return records.stream().filter(r -> status.equals(r.getStatus())).count();
     }
 
+    /** 累加记录排放量并保留 2 位小数（null 视作 0） */
     private BigDecimal sumAmount(List<EmissionRecord> records) {
         BigDecimal total = records.stream()
                 .map(EmissionRecord::getAmount)
@@ -478,14 +485,17 @@ public class StatsServiceImpl implements StatsService {
         return scale(total);
     }
 
+    /** null 归一为 0 */
     private BigDecimal nz(BigDecimal value) {
         return value == null ? ZERO : value;
     }
 
+    /** 金额口径：四舍五入保留 2 位小数 */
     private BigDecimal scale(BigDecimal value) {
         return nz(value).setScale(2, RoundingMode.HALF_UP);
     }
 
+    /** 占比计算：保留 1 位小数的百分比；总数为 0 时返回 0.0 */
     private BigDecimal percent(BigDecimal value, BigDecimal grand) {
         if (grand == null || grand.compareTo(ZERO) == 0) {
             return BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP);
@@ -494,6 +504,7 @@ public class StatsServiceImpl implements StatsService {
                 .divide(grand, 1, RoundingMode.HALF_UP);
     }
 
+    /** 星期枚举 → 中文标签（周日兜底） */
     private String weekdayLabel(DayOfWeek dayOfWeek) {
         switch (dayOfWeek) {
             case MONDAY: return "周一";
@@ -506,6 +517,7 @@ public class StatsServiceImpl implements StatsService {
         }
     }
 
+    /** 构造 2024-01 ~ 2024-12 的月份标签 */
     private static List<String> buildMonths() {
         List<String> months = new ArrayList<>();
         for (int i = 1; i <= 12; i++) {

@@ -17,7 +17,9 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 企业服务实现
+ * 企业服务实现。
+ * 无事务边界（单表操作）；新增时编号空则按「ENT + 年份 + 4 位序号」生成，注册时间默认当日；
+ * 行业列表从企业数据内存内去重排序，供前端筛选下拉。
  */
 @Service
 public class EnterpriseServiceImpl implements EnterpriseService {
@@ -60,6 +62,7 @@ public class EnterpriseServiceImpl implements EnterpriseService {
         return enterprise;
     }
 
+    /** 新增企业：编号空时按「ENT + 年份 + 自增号」生成，状态默认 active，注册时间默认当日 */
     @Override
     public Enterprise create(Enterprise enterprise) {
         if (!StringUtils.hasText(enterprise.getId())) {

@@ -46,6 +46,7 @@ public class ComplianceServiceImpl implements ComplianceService {
         this.emissionRecordMapper = emissionRecordMapper;
     }
 
+    /** 直接入参判定：链不可用且配置允许时回退本地规则（onChain=false），否则原样抛出 */
     @Override
     public ComplianceResult evaluate(ComplianceInput input) {
         try {
@@ -65,12 +66,14 @@ public class ComplianceServiceImpl implements ComplianceService {
         }
     }
 
+    /** 按已入库记录判定：合计由数据库聚合，不传入增量额 */
     @Override
     public ComplianceResult evaluateForRecord(EmissionRecord record) {
         return evaluate(buildInput(record.getEnterpriseId(), record.getPeriod(), record.getSourceCode(),
                 record.getActivityData(), record.getEmissionFactor(), null));
     }
 
+    /** 按排放记录编号判定：先查库再聚合，记录不存在抛 404 */
     @Override
     public ComplianceResult evaluateByEmissionId(String emissionId) {
         EmissionRecord record = emissionRecordMapper.selectById(emissionId);
@@ -80,6 +83,7 @@ public class ComplianceServiceImpl implements ComplianceService {
         return evaluateForRecord(record);
     }
 
+    /** 填报试算：把未入库的增量计入本期与年度合计（保留 2 位小数），仅判定不落库 */
     @Override
     public ComplianceResult evaluateForCheck(String enterpriseId, String period, String sourceCode,
                                              BigDecimal activityData, BigDecimal factor) {
@@ -91,12 +95,14 @@ public class ComplianceServiceImpl implements ComplianceService {
         return evaluate(buildInput(enterpriseId, period, sourceCode, activityData, factor, amount));
     }
 
+    /** 认证上链时的合规位掩码：判定不可用（负值）时按 0 处理，保证存证流程不中断 */
     @Override
     public int flagsForCertify(String emissionId) {
         ComplianceResult result = evaluateByEmissionId(emissionId);
         return Math.max(0, result.getFlags());
     }
 
+    /** 读证书的链上合规快照位掩码（未找到返回 0） */
     @Override
     public int certificateFlags(String certId) {
         return chainGateway.findByCertId(certId)
@@ -104,6 +110,7 @@ public class ComplianceServiceImpl implements ComplianceService {
                 .orElse(0);
     }
 
+    /** 按防伪码读链上合规快照位掩码（未命中返回 0） */
     @Override
     public int flagsForFingerprint(String fingerprint) {
         return chainGateway.findByFingerprint(fingerprint)
@@ -111,6 +118,7 @@ public class ComplianceServiceImpl implements ComplianceService {
                 .orElse(0);
     }
 
+    /** 填报触发：同步本期/年度合计镜像 + 最近使用因子（企业、报告期为空则跳过） */
     @Override
     public void syncMirrors(EmissionRecord record) {
         if (record == null || !StringUtils.hasText(record.getEnterpriseId())
@@ -123,6 +131,7 @@ public class ComplianceServiceImpl implements ComplianceService {
         }
     }
 
+    /** 记录被删除后重算该企业该报告期的合计镜像，避免链上残留偏高导致配额误判 */
     @Override
     public void syncMirrors(String enterpriseId, String period) {
         if (!StringUtils.hasText(enterpriseId) || !StringUtils.hasText(period)) {
@@ -138,11 +147,13 @@ public class ComplianceServiceImpl implements ComplianceService {
         chainGateway.syncYearTotal(enterpriseId, year, sumAmountInYear(enterpriseId, year));
     }
 
+    /** 读取企业某年度配额（读链，未配置时由链侧返回默认规则） */
     @Override
     public BigDecimal quotaOf(String enterpriseId, int year) {
         return chainGateway.annualQuotaOf(enterpriseId, year);
     }
 
+    /** 治理参数写入：设置企业某年度配额，前置校验企业编号/年份/非负后写链 */
     @Override
     public void setQuota(String enterpriseId, int year, BigDecimal quota) {
         if (!StringUtils.hasText(enterpriseId)) {
@@ -157,11 +168,13 @@ public class ComplianceServiceImpl implements ComplianceService {
         chainGateway.setAnnualQuota(enterpriseId, year, quota);
     }
 
+    /** 读环比波动阈值（基点，2500 表示 25%） */
     @Override
     public int fluctuationThresholdBp() {
         return chainGateway.fluctuationThresholdBp();
     }
 
+    /** 写环比波动阈值（基点），校验范围后写链 */
     @Override
     public void setFluctuationThresholdBp(int bp) {
         if (bp <= 0 || bp > 10000) {
@@ -170,11 +183,13 @@ public class ComplianceServiceImpl implements ComplianceService {
         chainGateway.setFluctuationThresholdBp(bp);
     }
 
+    /** 读迟报判定月数阈值 */
     @Override
     public int lateReportMonths() {
         return chainGateway.lateReportMonths();
     }
 
+    /** 写迟报判定月数阈值（0~24），校验范围后写链 */
     @Override
     public void setLateReportMonths(int months) {
         if (months < 0 || months > 24) {
@@ -242,6 +257,7 @@ public class ComplianceServiceImpl implements ComplianceService {
         return history.isEmpty() ? null : history.get(0).getPeriod();
     }
 
+    /** 某企业某报告期的排放量合计（报告期为空返回 0） */
     private BigDecimal sumAmount(String enterpriseId, String period) {
         if (!StringUtils.hasText(period)) {
             return BigDecimal.ZERO;
@@ -251,6 +267,7 @@ public class ComplianceServiceImpl implements ComplianceService {
                 .eq(EmissionRecord::getPeriod, period)));
     }
 
+    /** 某企业某年度（报告期 likeRight 'yyyy-'）的排放量合计 */
     private BigDecimal sumAmountInYear(String enterpriseId, int year) {
         List<EmissionRecord> records = emissionRecordMapper.selectList(new LambdaQueryWrapper<EmissionRecord>()
                 .eq(EmissionRecord::getEnterpriseId, enterpriseId)
@@ -258,6 +275,7 @@ public class ComplianceServiceImpl implements ComplianceService {
         return sumOf(records);
     }
 
+    /** 对记录列表累加 amount（null 视作 0） */
     private static BigDecimal sumOf(List<EmissionRecord> records) {
         BigDecimal total = BigDecimal.ZERO;
         for (EmissionRecord record : records) {

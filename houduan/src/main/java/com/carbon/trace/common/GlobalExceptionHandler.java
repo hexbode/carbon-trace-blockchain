@@ -17,12 +17,24 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 全局异常处理器：统一产出 {"message": "错误描述"}
+ * 全局异常处理器：兜底捕获 Controller / Service 抛出的各类异常，统一产出 JSON 响应体
+ * {"message": "错误描述"}，避免异常堆栈与内部实现细节泄漏到前端。
+ *
+ * 处理清单（按 Spring 异常解析规则命中）：
+ *   ApiException                          业务异常，按其携带的状态码返回；
+ *   NoResourceFoundException              静态资源不存在，按 404 而非 500 返回；
+ *   MissingServletRequestParameterException 缺少必需参数，按 400 返回；
+ *   HttpMessageNotReadableException        请求体缺失 / JSON 格式错误，按 400 返回；
+ *   MaxUploadSizeExceededException         上传文件超限，按 400 返回；
+ *   DuplicateKeyException                 唯一约束冲突，返回可读提示且不暴露表结构；
+ *   DataAccessException                   其余数据库异常，返回通用校验失败提示并记录完整日志；
+ *   Exception                             未知异常兜底，通用文案 + 记录堆栈日志。
  */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    /** 业务异常：直接采用异常携带的 HTTP 状态码与消息，是业务校验失败统一出口 */
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<Map<String, Object>> handleApiException(ApiException e) {
         return build(e.getStatus(), e.getMessage());
@@ -69,6 +81,7 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "数据校验失败，请检查填写内容是否完整、格式是否正确");
     }
 
+    /** 兜底处理任何未命中更具体分支的异常：仅返回通用文案，完整堆栈记入日志便于排查 */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleException(Exception e) {
         // 未知异常仅返回通用文案，避免泄露内部实现细节；堆栈必须记录到日志便于排查
@@ -76,6 +89,7 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "服务繁忙，请稍后重试");
     }
 
+    /** 统一组装响应体 {"message": ...} 并按给定 HTTP 状态码返回 */
     private ResponseEntity<Map<String, Object>> build(HttpStatus status, String message) {
         Map<String, Object> body = new HashMap<>();
         body.put("message", message);

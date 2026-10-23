@@ -16,7 +16,13 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 异常告警接口
+ * 异常告警接口：告警的列表、详情与处理（形成闭环）。
+ *
+ * 暴露接口：
+ *   GET /api/alerts             告警列表（可按级别 level、状态 status 过滤）；
+ *   GET /api/alerts/{id}        单条告警详情；
+ *   PUT /api/alerts/{id}/resolve  处理告警（标记已处理）。
+ * 角色约定：查询登录即可；处理告警仅 regulator / admin（requireRegulatorRole）。
  */
 @RestController
 @RequestMapping("/api/alerts")
@@ -28,18 +34,20 @@ public class AlertController {
         this.alertService = alertService;
     }
 
+    /** 告警列表：可按级别 level、状态 status 过滤 */
     @GetMapping
     public List<Alert> list(@RequestParam(required = false) String level,
                             @RequestParam(required = false) String status) {
         return alertService.list(level, status);
     }
 
+    /** 依据告警 ID 查询单条告警详情 */
     @GetMapping("/{id}")
     public Alert get(@PathVariable String id) {
         return alertService.getById(id);
     }
 
-    /** 处理告警 */
+    /** 处理告警（标记为已处理并记录处理人/时间）；仅监管/管理员可执行 */
     @PutMapping("/{id}/resolve")
     public Alert resolve(@PathVariable String id) {
         requireRegulatorRole();

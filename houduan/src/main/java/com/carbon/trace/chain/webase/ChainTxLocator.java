@@ -23,6 +23,7 @@ public class ChainTxLocator {
     private final Map<String, Entry> byCertId = new ConcurrentHashMap<>();
     private final Map<String, String> certIdByTxHash = new ConcurrentHashMap<>();
 
+    /** 记录一笔存证的位置信息：有交易哈希则以其为准覆盖写入；无哈希仅有区块高度时仅作兜底（不覆盖既有值） */
     public void remember(String certId, String txHash, Long blockNumber) {
         if (certId == null) {
             return;
@@ -35,6 +36,7 @@ public class ChainTxLocator {
         }
     }
 
+    /** 按认证编号返回已缓存的交易哈希 / 区块高度；无缓存或编号为空时返回空 */
     public Optional<Entry> lookup(String certId) {
         return certId == null ? Optional.empty() : Optional.ofNullable(byCertId.get(certId));
     }
@@ -57,6 +59,7 @@ public class ChainTxLocator {
         return found;
     }
 
+    /** 按归一化交易哈希反查认证编号，便于「按交易哈希核验」时快速定位且避免回链 */
     public Optional<String> certIdByTxHash(String txHash) {
         if (txHash == null) {
             return Optional.empty();
@@ -64,6 +67,7 @@ public class ChainTxLocator {
         return Optional.ofNullable(certIdByTxHash.get(normalize(txHash)));
     }
 
+    /** 哈希归一化：去首尾空白、转小写、去掉 0x 前缀，作为两个缓存 Map 的统一键 */
     private static String normalize(String value) {
         String v = value.trim().toLowerCase();
         return v.startsWith("0x") ? v.substring(2) : v;

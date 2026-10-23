@@ -24,6 +24,10 @@ public class JacksonConfig {
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    /**
+     * 注册 LocalDateTime 的全局序列化/反序列化器，统一为 yyyy-MM-dd HH:mm:ss，
+     * 影响所有 JSON 输出与请求体反序列化中的 LocalDateTime 字段。
+     */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer dateTimeCustomizer() {
         return builder -> {

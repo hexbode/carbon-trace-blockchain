@@ -61,6 +61,7 @@ public class ChainCertificate {
     /** 所在区块高度（链上回填，不落库） */
     private Long blockIndex;
 
+    /** 是否仍为有效状态（仅 VALID 可继续作为核验凭证） */
     public boolean isActive() {
         return status == ChainCertStatus.VALID;
     }

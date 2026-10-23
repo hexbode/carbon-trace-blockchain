@@ -65,6 +65,7 @@ public class WebaseChainGateway implements ChainGateway {
     private final ChainTxLocator txLocator;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 探活结果缓存：时间戳与布尔值，配合 available() 节流对链的探活请求 */
     private volatile long availableCheckedAt = 0L;
     private volatile boolean availableCache = false;
 
@@ -109,6 +110,7 @@ public class WebaseChainGateway implements ChainGateway {
 
     // ---------------- 认证存证（写） ----------------
 
+    /** 认证上链：把认证要素整成定标参数调存证合约 certify，成功后用回执回填 txHash/区块高度并写入缓存 */
     @Override
     public ChainCertificate certify(CertifyCommand command) {
         List<Object> params = new ArrayList<>();
@@ -143,11 +145,13 @@ public class WebaseChainGateway implements ChainGateway {
         return cert;
     }
 
+    /** 监管撤销：调存证合约 revoke 把状态翻转为终局 REVOKED */
     @Override
     public void revoke(String certId, String reason) {
         callWrite(contractRegistry(), "revoke", List.of(nullToEmpty(certId), nullToEmpty(reason)));
     }
 
+    /** 排放记录删除对应的作废标记：调 invalidateByEmissionId 写链（未认证过的记录合约返回 false 不 revert） */
     @Override
     public void invalidateByEmissionId(String emissionId, String reason) {
         // 链上不可删除，这里是作废标记；未认证过的排放记录合约会直接返回 false（不 revert）
@@ -156,6 +160,7 @@ public class WebaseChainGateway implements ChainGateway {
 
     // ---------------- 认证存证（读 / 核验） ----------------
 
+    /** 按电子防伪码精确查询（大小写敏感，与合约内对防伪码做 keccak 索引的口径天然一致） */
     @Override
     public Optional<ChainCertificate> findByFingerprint(String fingerprint) {
         if (fingerprint == null || fingerprint.isBlank()) {
@@ -165,6 +170,7 @@ public class WebaseChainGateway implements ChainGateway {
         return readCertificate("getByFingerprint", List.of(fingerprint.trim()));
     }
 
+    /** 按认证编号查询存证 */
     @Override
     public Optional<ChainCertificate> findByCertId(String certId) {
         if (certId == null || certId.isBlank()) {
@@ -173,6 +179,7 @@ public class WebaseChainGateway implements ChainGateway {
         return readCertificate("getByCertId", List.of(certId));
     }
 
+    /** 按排放记录编号查询（与认证编号同号） */
     @Override
     public Optional<ChainCertificate> findByEmissionId(String emissionId) {
         if (emissionId == null || emissionId.isBlank()) {
@@ -181,6 +188,7 @@ public class WebaseChainGateway implements ChainGateway {
         return readCertificate("getByEmissionId", List.of(emissionId));
     }
 
+    /** 按交易哈希核验：先命中本进程缓存，否则解析回执入参解出认证编号再查询并回填缓存 */
     @Override
     public Optional<ChainCertificate> findByTxHash(String txHash) {
         if (txHash == null || txHash.isBlank()) {
@@ -206,12 +214,14 @@ public class WebaseChainGateway implements ChainGateway {
         return findByCertId(certId);
     }
 
+    /** 兼容旧语义：先按防伪码后按交易哈希 */
     @Override
     public Optional<ChainCertificate> findAny(String fingerprintOrTxHash) {
         Optional<ChainCertificate> byFingerprint = findByFingerprint(fingerprintOrTxHash);
         return byFingerprint.isPresent() ? byFingerprint : findByTxHash(fingerprintOrTxHash);
     }
 
+    /** 按编号集合批量取凭证，并按需按区块反查交易哈希回填展示字段 */
     @Override
     public Map<String, ChainCertificate> certificatesByEmissionIds(Collection<String> emissionIds) {
         Map<String, ChainCertificate> result = new LinkedHashMap<>();
@@ -243,6 +253,7 @@ public class WebaseChainGateway implements ChainGateway {
         return result;
     }
 
+    /** 链上证书计数 total/valid/revoked/invalid 四元组（供对账与统计） */
     @Override
     public ChainCertCount countCertificates() {
         JsonNode values = callRead(contractRegistry(), "count", List.of());
@@ -256,12 +267,14 @@ public class WebaseChainGateway implements ChainGateway {
 
     // ---------------- 链浏览 / 统计 ----------------
 
+    /** 查询最新区块高度（无法解析时回到缺省 -1） */
     @Override
     public long latestBlockNumber() {
         JsonNode response = client.get("/" + groupId() + "/web3/blockNumber");
         return nodeToLong(response);
     }
 
+    /** 链上总交易数（节点口径，兼容 1.5.x 的 txSum 与 3.x 的 transactionCount） */
     @Override
     public long chainTxCount() {
         JsonNode response = client.get("/" + groupId() + "/web3/transaction-total");
@@ -273,6 +286,7 @@ public class WebaseChainGateway implements ChainGateway {
         return count == null ? 0L : nodeToLong(count);
     }
 
+    /** 倒序取最近 limit 个区块及其认证交易明细；limit 非法时回退配置的默认每页数 */
     @Override
     public List<ChainBlockView> listRecentBlocks(int limit) {
         int size = limit <= 0 ? properties.getBlockListLimit() : limit;
@@ -331,6 +345,7 @@ public class WebaseChainGateway implements ChainGateway {
 
     // ---------------- 合规判定 ----------------
 
+    /** 合规判定：把后端聚合好的入参定标后调合约 checkAll，返回值按返回元组顺序还原为结果对象 */
     @Override
     public ComplianceResult checkAll(ComplianceInput input) {
         List<Object> params = new ArrayList<>();
@@ -357,12 +372,14 @@ public class WebaseChainGateway implements ChainGateway {
         return result;
     }
 
+    /** 设置企业某年度配额（写链，配额规则阈值） */
     @Override
     public void setAnnualQuota(String enterpriseId, int year, BigDecimal quota) {
         callWrite(contractCompliance(), "setAnnualQuota",
                 List.of(nullToEmpty(enterpriseId), (long) year, AmountCodec.toScaled(quota)));
     }
 
+    /** 查询企业某年度配额；未配置返回 0 */
     @Override
     public BigDecimal annualQuotaOf(String enterpriseId, int year) {
         JsonNode values = callRead(contractCompliance(), "annualQuotaOf",
@@ -370,40 +387,47 @@ public class WebaseChainGateway implements ChainGateway {
         return AmountCodec.fromScaled(num(values, 0));
     }
 
+    /** 同步企业某报告期合计排放量（写链，环比规则依赖上次报告期数据） */
     @Override
     public void syncPeriodTotal(String enterpriseId, String period, BigDecimal amount) {
         callWrite(contractCompliance(), "setPeriodTotal",
                 List.of(nullToEmpty(enterpriseId), nullToEmpty(period), AmountCodec.toScaled(amount)));
     }
 
+    /** 同步企业某年度累计排放量（写链，配额规则依赖） */
     @Override
     public void syncYearTotal(String enterpriseId, int year, BigDecimal amount) {
         callWrite(contractCompliance(), "setYearTotal",
                 List.of(nullToEmpty(enterpriseId), (long) year, AmountCodec.toScaled(amount)));
     }
 
+    /** 记录某企业某排放源最近一次排放因子（写链，因子一致性规则依赖） */
     @Override
     public void rememberFactor(String enterpriseId, String sourceCode, BigDecimal factor) {
         callWrite(contractCompliance(), "rememberFactor",
                 List.of(nullToEmpty(enterpriseId), nullToEmpty(sourceCode), AmountCodec.factorToScaled(factor)));
     }
 
+    /** 设置环比波动阈值（写链，基点） */
     @Override
     public void setFluctuationThresholdBp(int bp) {
         callWrite(contractCompliance(), "setFluctuationThresholdBp", List.of((long) bp));
     }
 
+    /** 查询环比波动阈值（基点） */
     @Override
     public int fluctuationThresholdBp() {
         JsonNode values = callRead(contractCompliance(), "fluctuationThresholdBp", List.of());
         return (int) num(values, 0);
     }
 
+    /** 设置迟报判定月数（写链） */
     @Override
     public void setLateReportMonths(int months) {
         callWrite(contractCompliance(), "setLateReportMonths", List.of((long) months));
     }
 
+    /** 查询迟报判定月数 */
     @Override
     public int lateReportMonths() {
         JsonNode values = callRead(contractCompliance(), "lateReportMonths", List.of());
@@ -412,6 +436,7 @@ public class WebaseChainGateway implements ChainGateway {
 
     // ---------------- 健康 ----------------
 
+    /** 探活：调 latestBlockNumber 判断链可达，结果 30 秒内缓存复用，避免每请求都打链 */
     @Override
     public boolean available() {
         long now = System.currentTimeMillis();
@@ -430,6 +455,7 @@ public class WebaseChainGateway implements ChainGateway {
         return ok;
     }
 
+    /** 运行模式标识：恒为 webase */
     @Override
     public String mode() {
         return "webase";
@@ -469,6 +495,7 @@ public class WebaseChainGateway implements ChainGateway {
         return receipt;
     }
 
+    /** 组装调用请求：funcParam 经 encodeFuncParams 转换，签名方式二选一决定走 handleWithSign 还是 handle */
     private JsonNode invoke(ChainProperties.Contract contract, String funcName, List<Object> params) {
         TransHandleRequest request = new TransHandleRequest();
         request.setGroupId(groupId());
@@ -531,6 +558,7 @@ public class WebaseChainGateway implements ChainGateway {
         return Optional.of(cert);
     }
 
+    /** 用已知交易哈希与已存的 createdBlock 回填凭证展示字段（缓存未命中时 txHash 可为空） */
     private void fillTxInfo(ChainCertificate cert, String txHash) {
         cert.setTxHash(txHash);
         cert.setBlockIndex(cert.getCreatedBlock());
@@ -684,14 +712,17 @@ public class WebaseChainGateway implements ChainGateway {
         return cert;
     }
 
+    /** 存证合约配置（名称/地址/ABI 位置） */
     private ChainProperties.Contract contractRegistry() {
         return properties.getContracts().getRegistry();
     }
 
+    /** 合规合约配置（名称/地址/ABI 位置） */
     private ChainProperties.Contract contractCompliance() {
         return properties.getContracts().getCompliance();
     }
 
+    /** 取合约地址；未配置视为内部配置错误直接抛 500 */
     private String requireAddress(ChainProperties.Contract contract) {
         String address = contract.getAddress();
         if (address == null || address.isBlank()) {
@@ -700,31 +731,37 @@ public class WebaseChainGateway implements ChainGateway {
         return address.trim();
     }
 
+    /** 存证合约地址，缺省返回空串供自检判断 */
     private String registryAddress() {
         String address = contractRegistry().getAddress();
         return address == null ? "" : address.trim();
     }
 
+    /** 合规合约地址，缺省返回空串供自检判断 */
     private String complianceAddress() {
         String address = contractCompliance().getAddress();
         return address == null ? "" : address.trim();
     }
 
+    /** 群组标识：缺省回退 group0（WeBASE 3.x 默认首个群组） */
     private String groupId() {
         String value = properties.getWebase().getGroupId();
         return value == null || value.isBlank() ? "group0" : value.trim();
     }
 
+    /** Sign 托管用户标识（空串表示未配置，转为本地私钥模式） */
     private String signUserId() {
         String value = properties.getWebase().getSignUserId();
         return value == null ? "" : value.trim();
     }
 
+    /** 本地私钥用户地址（空串表示未配置） */
     private String userAddress() {
         String value = properties.getWebase().getUserAddress();
         return value == null ? "" : value.trim();
     }
 
+    /** null 归一为空串：避免把 null 字符串写进链上编码 */
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
     }
@@ -744,6 +781,7 @@ public class WebaseChainGateway implements ChainGateway {
         }
     }
 
+    /** 哈希归一化：去空白、转小写、去 0x 前缀，用于交易归属比对 */
     private static String normalizeHash(String value) {
         if (value == null) {
             return "";
@@ -752,6 +790,7 @@ public class WebaseChainGateway implements ChainGateway {
         return v.startsWith("0x") ? v.substring(2) : v;
     }
 
+    /** 取 JSON 对象指定字段的文本值；节点/字段缺失或为 null 返回 null */
     private static String text(JsonNode node, String field) {
         if (node == null) {
             return null;
@@ -760,21 +799,25 @@ public class WebaseChainGateway implements ChainGateway {
         return value == null || value.isNull() ? null : value.asText();
     }
 
+    /** 取 JSON 数组指定下标的文本值；越界或为 null 返回 null */
     private static String text(JsonNode array, int index) {
         JsonNode value = array == null ? null : array.get(index);
         return value == null || value.isNull() ? null : value.asText();
     }
 
+    /** 取 JSON 数组指定下标的布尔值；缺失默认为 false */
     private static boolean bool(JsonNode array, int index) {
         JsonNode value = array == null ? null : array.get(index);
         return value != null && value.asBoolean(false);
     }
 
+    /** 取 JSON 数组指定下标的数值；缺失返回 0 */
     private static long num(JsonNode array, int index) {
         JsonNode value = array == null ? null : array.get(index);
         return nodeToLong(value);
     }
 
+    /** JsonNode → long：数字节点直接取值，文本走十进制/十六进制解析，缺失返回 0 */
     private static long nodeToLong(JsonNode value) {
         if (value == null || value.isNull()) {
             return 0L;

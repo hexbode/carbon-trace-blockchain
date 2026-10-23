@@ -10,7 +10,9 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 用户账号设置服务实现
+ * 用户账号设置服务实现。
+ * 读取时无记录则按默认值（全部开启）补齐，保证首次访问即可返回完整设置；
+ * 更新时对请求体做布尔解析，无效值沿用原值。
  */
 @Service
 public class UserSettingsServiceImpl implements UserSettingsService {
