@@ -24,7 +24,7 @@
 | 前端 | Vue 3 + Vite 5 + Element Plus + ECharts + Pinia + Vue Router |
 | 后端 | Spring Boot 3.4.3 + MyBatis-Plus 3.5.9 + JDK 17 |
 | 数据库 | MySQL 8.x（库名 `carbon_emission`，utf8mb4） |
-| 区块链 | FISCO BCOS 2.9.x 联盟链 + WeBASE 1.5.x（WeBASE-Front / WeBASE-Sign）+ Solidity 0.6.10 智能合约 |
+| 区块链 | FISCO BCOS 3.x 联盟链 + WeBASE 3.1.1（WeBASE-Front / WeBASE-Sign）+ Solidity 0.8.x 智能合约 |
 | 链上调用 | SpringBoot → WeBASE-Front REST（`/trans/handle` 等），免 SDK 依赖 |
 | 鉴权 | JWT（有效期 24 小时）+ 拦截器 + 角色校验 |
 
@@ -38,7 +38,7 @@
 │   ├── contracts/            Solidity 智能合约源码与部署脚本
 │   │   ├── CarbonCertRegistry.sol   认证存证合约（认证 / 撤销 / 作废 / 核验）
 │   │   ├── CarbonCompliance.sol     合规判定合约（配额 / 环比 / 漏填 / 因子 / 迟报）
-│   │   └── deploy-contracts.ps1     编译 → 部署 → 注册 ABI
+│   │   └── deploy-contracts.sh      编译（solc 0.8.30）→ 部署 → 注册 ABI（Linux/Ubuntu）
 │   ├── src/main/java/com/carbon/trace/
 │   │   ├── chain/            链网关层（ChainGateway 抽象 + webase 实现 + stub 离线桩）
 │   │   ├── common/           工具与全局处理（JWT、异常、电子防伪码等）
@@ -74,7 +74,9 @@
 - Maven（直接用项目自带的 `mvnw` / `mvnw.cmd` 即可）
 - Node.js 18+
 - MySQL 8.x
-- **联盟链环境（生产/演示部署需要）**：FISCO BCOS 2.9.x 节点 + WeBASE 1.5.x（WeBASE-Front 5002 / WeBASE-Sign 5004）
+- **联盟链环境（生产/演示部署需要）**：FISCO BCOS 3.x 节点 + WeBASE 3.1.1（WeBASE-Front 5002 / WeBASE-Sign 5004）
+  - 群组标识为 `group0`（1.5.x 才是 `1`），通过 `carbon.chain.webase.group-id` 配置
+  - 编译合约需 **solc 0.8.30**（`--via-ir --evm-version london`），WeBASE 内置编译器为 0.8.11，不支持本项目合约
   - 本机开发**可不装**：后端默认 `carbon.chain.mode=stub`（离线桩），用于保证应用可启动、接口回归可跑
 
 ---
@@ -129,23 +131,30 @@ npm run dev
 
 ### 4. 接入联盟链（生产 / 演示部署）
 
-```powershell
-# 1) 前置：FISCO BCOS 2.9.x 节点 + WeBASE-Front（5002）已启动；生产模式需 WeBASE-Sign（5004）
-Invoke-RestMethod "http://127.0.0.1:5002/WeBASE-Front/1/web3/blockNumber"    # 应返回区块高度
+> 以下命令以 Ubuntu 上的 FISCO BCOS 3.x + WeBASE 3.1.1 为例；Windows 侧可用等价的 curl / PowerShell 调用。
 
-# 2) 创建链上应用账户（Sign 托管，私钥不出 Sign 服务）
-Invoke-RestMethod -Method Post "http://127.0.0.1:5002/WeBASE-Front/privateKey?type=2&userName=carbon-backend"   # 返回 signUserId
-Invoke-RestMethod "http://127.0.0.1:5002/WeBASE-Front/privateKey/userInfoWithSign?signUserId=<signUserId>"       # 返回账户 address
+```bash
+# 1) 前置：FISCO BCOS 3.x 节点（默认 20200/20201）+ WeBASE-Front（5002）已启动
+curl http://127.0.0.1:5002/WeBASE-Front/group0/web3/blockNumber        # 应返回区块高度
 
-# 3) 编译 → 部署两个合约 → 注册 ABI，并打印应写回的配置
-cd houduan
-powershell -ExecutionPolicy Bypass -File .\contracts\deploy-contracts.ps1 `
-    -Front http://127.0.0.1:5002 -SignUserId <signUserId> -AppAddress <address> -OutputFile .\src\main\resources\application-local.yml
+# 2) 准备签名账户（二选一）
+#    a. WeBASE-Sign 托管（私钥不出 Sign 服务，推荐生产）
+curl -X POST 'http://127.0.0.1:5002/WeBASE-Front/privateKey?type=2&userName=carbon-backend'   # 返回 signUserId
+#    b. Front 本地私钥（演示环境最省事，本项目 Ubuntu 部署即用此方式）
+curl 'http://127.0.0.1:5002/WeBASE-Front/privateKey?groupId=group0&type=0&userName=carbon-backend'  # 返回 address
+#       账户地址还要作为存证合约的初始 writer，务必记下
 
-# 4) 以真实链模式启动（application-local.yml 不入库，包含合约地址与账户）
-$env:CARBON_CHAIN_MODE='webase'
-$env:CARBON_CHAIN_SIGN_USER_ID='<signUserId>'
-.\mvnw.cmd spring-boot:run
+# 3) 编译 → 部署两个合约 → 注册 ABI（需要 solc 0.8.30）
+cd houduan/contracts
+./deploy-contracts.sh --user 0x<address> --solc /usr/local/bin/solc-0.8.30
+#    也可追加 --out /opt/carbon-trace/application-ubuntu.yml 把地址直接写成配置片段
+
+# 4) 以真实链模式启动（演示配置文件不入库，包含合约地址与账户）
+#    /opt/carbon-trace/application-ubuntu.yml：
+#      carbon.chain.mode: webase
+#      carbon.chain.webase.group-id: "group0"
+#      carbon.chain.webase.user-address: "0x<address>"
+#      carbon.chain.contracts.registry.address / compliance.address: "0x..."
 ```
 
 > ⚠️ 配置里**不要写私钥**：使用 WeBASE-Sign 时后端只持有 `signUserId`；本机真实配置请放在
@@ -222,7 +231,21 @@ A：`carbon.chain.mode=webase` 时链相关调用会返回 **503**（"联盟链�
 **Q：区块列表与交易哈希从哪来？**
 
 A：区块来自 `GET /api/blockchain`（后端调 WeBASE-Front 的 `web3/blockByNumber`）；
-交易哈希无法由合约自述，写交易时取交易回执，历史查询时按区块反查 `CertCreated` 事件，并做缓存。
+交易哈希无法由合约自述，写交易时取交易回执并缓存，历史查询时解析区块内 `certify` 交易的入参
+（按 ABI 现算函数选择器 + 本地解码参数），不再依赖 WeBASE 的事件查询。
+> WeBASE 3.x 的 `/event/eventLogs/list` 是「事件订阅 + 等待回调」，超时只返回已收到的部分结果，
+> 同一区间多次查询条数不一致，因此不作为检索手段。
+
+**Q：部署合约报 `Stack too deep` / `Execution invalid opcode`？**
+
+A：前者说明编译器版本过低（合约需 ≥ 0.8.13 且开启 `--via-ir`），后者是 EVM 版本高于链支持的 `london`。
+`deploy-contracts.sh` 已固定使用 `--evm-version london --via-ir`，请配 `--solc /usr/local/bin/solc-0.8.30`。
+
+**Q：WeBASE 3.x 调用合约时 `funcParam` 怎么传？**
+
+A：3.x 的 `funcParam` 是 `List<String>`，每个元素**按原文**参与 ABI 编码：
+字符串直接给内容（**不要加引号**，否则引号会写进链上数据）、数字 `1000`、数组 `["0x..."]`（元素必须是 JSON 字符串）。
+后端 `WebaseChainGateway#encodeFuncParams` 已统一处理，请勿手工拼引号。
 
 **Q：历史防伪码在链上查不到怎么办？**
 

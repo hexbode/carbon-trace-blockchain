@@ -1,0 +1,110 @@
+package com.carbon.trace.chain.support;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+
+/**
+ * Keccak-256（以太坊/Solidity 使用的哈希，不是 NIST SHA3-256）。
+ *
+ * 仅用于本地计算 ABI 函数选择器与事件 topic：
+ * WeBASE 3.x 的事件订阅式查询会按等待超时返回「部分结果」，不能作为可靠的事件检索手段，
+ * 因此交易归属改为直接解析区块交易的 input（见 WebaseChainGateway），需要选择器做本地判定。
+ */
+public final class Keccak256 {
+
+    private static final int RATE = 136;
+
+    private static final long[] ROUND_CONSTANTS = {
+            0x0000000000000001L, 0x0000000000008082L, 0x800000000000808aL, 0x8000000080008000L,
+            0x000000000000808bL, 0x0000000080000001L, 0x8000000080008081L, 0x8000000000008009L,
+            0x000000000000008aL, 0x0000000000000088L, 0x0000000080008009L, 0x000000008000000aL,
+            0x000000008000808bL, 0x800000000000008bL, 0x8000000000008089L, 0x8000000000008003L,
+            0x8000000000008002L, 0x8000000000000080L, 0x000000000000800aL, 0x800000008000000aL,
+            0x8000000080008081L, 0x8000000000008080L, 0x0000000080000001L, 0x8000000080008008L
+    };
+
+    /** 旋转位数，下标为 x * 5 + y */
+    private static final int[] ROTATION = {
+            0, 36, 3, 41, 18,
+            1, 44, 10, 45, 2,
+            62, 6, 43, 15, 61,
+            28, 55, 25, 21, 56,
+            27, 20, 39, 8, 14
+    };
+
+    private Keccak256() {
+    }
+
+    /** 函数选择器：keccak256(签名) 的前 4 字节（8 位十六进制，不含 0x） */
+    public static String selector(String signature) {
+        return hashHex(signature).substring(0, 8);
+    }
+
+    public static String hashHex(String input) {
+        return hashHex(input.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static String hashHex(byte[] input) {
+        int padded = ((input.length + 1 + RATE - 1) / RATE) * RATE;
+        byte[] data = Arrays.copyOf(input, padded);
+        data[input.length] ^= 0x01;
+        data[padded - 1] ^= (byte) 0x80;
+
+        long[] state = new long[25];
+        for (int offset = 0; offset < padded; offset += RATE) {
+            for (int lane = 0; lane < RATE / 8; lane++) {
+                long value = 0L;
+                for (int b = 7; b >= 0; b--) {
+                    value = (value << 8) | (data[offset + lane * 8 + b] & 0xFFL);
+                }
+                state[lane] ^= value;
+            }
+            permute(state);
+        }
+
+        byte[] digest = new byte[32];
+        for (int i = 0; i < 4; i++) {
+            for (int b = 0; b < 8; b++) {
+                digest[i * 8 + b] = (byte) (state[i] >>> (8 * b));
+            }
+        }
+        StringBuilder hex = new StringBuilder(64);
+        for (byte b : digest) {
+            hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+            hex.append(Character.forDigit(b & 0xF, 16));
+        }
+        return hex.toString();
+    }
+
+    private static void permute(long[] a) {
+        long[] c = new long[5];
+        long[] b = new long[25];
+        for (int round = 0; round < 24; round++) {
+            for (int x = 0; x < 5; x++) {
+                c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
+            }
+            for (int x = 0; x < 5; x++) {
+                long d = c[(x + 4) % 5] ^ rotl(c[(x + 1) % 5], 1);
+                for (int y = 0; y < 25; y += 5) {
+                    a[x + y] ^= d;
+                }
+            }
+            for (int x = 0; x < 5; x++) {
+                for (int y = 0; y < 5; y++) {
+                    b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(a[x + 5 * y], ROTATION[x * 5 + y]);
+                }
+            }
+            for (int x = 0; x < 5; x++) {
+                for (int y = 0; y < 5; y++) {
+                    a[x + 5 * y] = b[x + 5 * y] ^ (~b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
+                }
+            }
+            a[0] ^= ROUND_CONSTANTS[round];
+        }
+    }
+
+    private static long rotl(long value, int bits) {
+        int n = bits & 63;
+        return n == 0 ? value : (value << n) | (value >>> (64 - n));
+    }
+}

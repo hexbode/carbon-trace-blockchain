@@ -51,7 +51,8 @@ carbon:
     webase:
       base-url: ${CARBON_WEBASE_URL:http://127.0.0.1:5002}
       context-path: /WeBASE-Front
-      group-id: 1
+      # WeBASE 1.5.x（FISCO BCOS 2.x）为 1；WeBASE 3.x（FISCO BCOS 3.x）为 group0
+      group-id: ${CARBON_CHAIN_GROUP_ID:group0}
       # 生产：WeBASE-Sign 托管用户（私钥不出 Sign 服务）
       sign-user-id: ${CARBON_CHAIN_SIGN_USER_ID:}
       # 本地开发：WeBASE-Front 本地私钥用户地址

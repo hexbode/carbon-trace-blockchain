@@ -11,8 +11,7 @@ import com.carbon.trace.chain.model.CertifyCommand;
 import com.carbon.trace.chain.model.ComplianceInput;
 import com.carbon.trace.chain.model.ComplianceResult;
 import com.carbon.trace.chain.support.AmountCodec;
-import com.carbon.trace.chain.webase.dto.DecodedEventLogDto;
-import com.carbon.trace.chain.webase.dto.EventLogListRequest;
+import com.carbon.trace.chain.support.Keccak256;
 import com.carbon.trace.chain.webase.dto.TransHandleReceipt;
 import com.carbon.trace.chain.webase.dto.TransHandleRequest;
 import com.carbon.trace.chain.webase.dto.WebaseBlockDto;
@@ -27,6 +26,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -67,6 +67,9 @@ public class WebaseChainGateway implements ChainGateway {
 
     private volatile long availableCheckedAt = 0L;
     private volatile boolean availableCache = false;
+
+    /** 存证合约 certify 函数选择器缓存（从 ABI 现算，见 certifySelector） */
+    private volatile String certifySelectorCache;
 
     public WebaseChainGateway(WebaseClient client,
                               ChainProperties properties,
@@ -189,18 +192,13 @@ public class WebaseChainGateway implements ChainGateway {
         if (cached.isPresent()) {
             return findByCertId(cached.get());
         }
-        // 2) 历史交易：按交易回执定位区块，再反查该区块的 CertCreated 事件
+        // 2) 历史交易：解析回执里的调用入参（certify 的首个参数即认证编号）
         JsonNode receipt = client.get("/" + groupId() + "/web3/transactionReceipt/" + txHash.trim());
         long blockNumber = TransHandleReceipt.parseNumber(text(receipt, "blockNumber"));
         if (blockNumber < 0) {
             return Optional.empty();
         }
-        String certId = eventsInRange(blockNumber, blockNumber).stream()
-                .filter(e -> normalized.equals(normalizeHash(e.transactionHash())))
-                .map(this::extractCertId)
-                .filter(java.util.Objects::nonNull)
-                .findFirst()
-                .orElse(null);
+        String certId = certifyCertId(text(receipt, "input"));
         if (certId == null) {
             return Optional.empty();
         }
@@ -223,7 +221,7 @@ public class WebaseChainGateway implements ChainGateway {
         for (String emissionId : emissionIds) {
             findByEmissionId(emissionId).ifPresent(cert -> result.put(emissionId, cert));
         }
-        // 批量按区块去重反查交易哈希，避免逐条查事件
+        // 批量按区块去重反查交易哈希，避免逐条查链
         Set<Long> blocks = new LinkedHashSet<>();
         for (ChainCertificate cert : result.values()) {
             if (cert.getCreatedBlock() != null && cert.getTxHash() == null) {
@@ -231,12 +229,10 @@ public class WebaseChainGateway implements ChainGateway {
             }
         }
         Map<String, String> txHashByCertId = new HashMap<>();
-        for (Long block : blocks) {
-            for (DecodedEventLogDto event : eventsInRange(block, block)) {
-                String certId = extractCertId(event);
-                if (certId != null) {
-                    txHashByCertId.put(certId, event.transactionHash());
-                }
+        for (Long blockNumber : blocks) {
+            WebaseBlockDto block = fetchBlock(blockNumber);
+            if (block != null) {
+                txHashByCertId.putAll(certifyTxsInBlock(block));
             }
         }
         for (ChainCertificate cert : result.values()) {
@@ -269,8 +265,12 @@ public class WebaseChainGateway implements ChainGateway {
     @Override
     public long chainTxCount() {
         JsonNode response = client.get("/" + groupId() + "/web3/transaction-total");
-        JsonNode txSum = response == null ? null : response.get("txSum");
-        return txSum == null ? 0L : nodeToLong(txSum);
+        if (response == null) {
+            return 0L;
+        }
+        // WeBASE 1.5.x 返回 {txSum}，3.x 返回 {transactionCount}
+        JsonNode count = response.hasNonNull("txSum") ? response.get("txSum") : response.get("transactionCount");
+        return count == null ? 0L : nodeToLong(count);
     }
 
     @Override
@@ -281,15 +281,6 @@ public class WebaseChainGateway implements ChainGateway {
             return List.of();
         }
         long from = Math.max(0L, latest - size + 1);
-        List<DecodedEventLogDto> events = eventsInRange(from, latest);
-        Map<String, String> certIdByTxHash = new HashMap<>();
-        for (DecodedEventLogDto event : events) {
-            String certId = extractCertId(event);
-            if (certId != null && event.transactionHash() != null) {
-                certIdByTxHash.put(normalizeHash(event.transactionHash()), certId);
-            }
-        }
-
         List<ChainBlockView> blocks = new ArrayList<>();
         for (long number = latest; number >= from; number--) {
             WebaseBlockDto dto = fetchBlock(number);
@@ -299,36 +290,30 @@ public class WebaseChainGateway implements ChainGateway {
             ChainBlockView view = new ChainBlockView();
             view.setIndex(dto.index());
             view.setHash(dto.getHash());
-            view.setPreviousHash(dto.getParentHash());
+            view.setPreviousHash(dto.previousHash());
             view.setTimestamp(dto.timestampMillis());
             view.setMerkleRoot(dto.merkleRoot());
             view.setNonce(dto.nonceLong());
-            view.setMiner(dto.getSealer());
-            for (String txHash : dto.transactionHashes()) {
-                String certId = certIdByTxHash.get(normalizeHash(txHash));
-                if (certId == null) {
-                    // 非认证交易（如合规镜像写入）不展示，保持区块浏览语义与认证存证一致
-                    continue;
-                }
-                ChainTxView tx = new ChainTxView();
-                tx.setTxHash(txHash);
-                tx.setEmissionId(certId);
-                fillTxDetail(tx, certId);
-                view.getTransactions().add(tx);
+            view.setMiner(dto.sealerName());
+            for (CertifyTx tx : certifyTxs(dto)) {
+                ChainTxView txView = new ChainTxView();
+                txView.setTxHash(tx.txHash());
+                txView.setEmissionId(tx.certId());
+                txView.setEnterpriseName(tx.enterpriseName());
+                txView.setPeriod(tx.period());
+                txView.setAmount(AmountCodec.fromScaled(tx.amountScaled()));
+                txView.setFingerprint(tx.fingerprint());
+                txView.setAuditor(tx.auditor());
+                view.getTransactions().add(txView);
             }
             blocks.add(view);
         }
         return blocks;
     }
 
-    private void fillTxDetail(ChainTxView tx, String certId) {
-        findByCertId(certId).ifPresent(cert -> {
-            tx.setEnterpriseName(cert.getEnterpriseName());
-            tx.setPeriod(cert.getPeriod());
-            tx.setAmount(cert.getAmount());
-            tx.setFingerprint(cert.getFingerprint());
-            tx.setAuditor(cert.getAuditor());
-        });
+    /** 区块内的一笔认证交易（字段全部来自交易入参，不再逐笔回链查询） */
+    private record CertifyTx(String txHash, String certId, String enterpriseId, String enterpriseName,
+                             String period, long amountScaled, String fingerprint, String auditor) {
     }
 
     private WebaseBlockDto fetchBlock(long number) {
@@ -490,7 +475,7 @@ public class WebaseChainGateway implements ChainGateway {
         request.setContractName(contract.getName());
         request.setContractAddress(requireAddress(contract));
         request.setFuncName(funcName);
-        request.setFuncParam(params);
+        request.setFuncParam(encodeFuncParams(params));
         request.setContractAbi(abiLoader.load(contract.getAbiLocation()));
 
         if (!signUserId().isBlank()) {
@@ -499,6 +484,30 @@ public class WebaseChainGateway implements ChainGateway {
         }
         request.setUser(userAddress());
         return client.post(HANDLE_LOCAL, request);
+    }
+
+    /**
+     * WeBASE 3.x 的 funcParam 是 List&lt;String&gt;，每个元素按「原文」参与 ABI 编码：
+     *  - 数字/布尔 → 1000 / true；
+     *  - 字符串 → 直接给内容，不能加引号（加引号会把引号一起写进链上数据）；
+     *  - 数组 → JSON 数组文本，形如 ["0x..."]（元素必须是 JSON 字符串）。
+     */
+    private List<String> encodeFuncParams(List<Object> params) {
+        List<String> encoded = new ArrayList<>(params.size());
+        for (Object param : params) {
+            if (param == null) {
+                encoded.add("");
+            } else if (param instanceof Number || param instanceof Boolean || param instanceof String) {
+                encoded.add(String.valueOf(param));
+            } else {
+                try {
+                    encoded.add(objectMapper.writeValueAsString(param));
+                } catch (Exception e) {
+                    encoded.add(String.valueOf(param));
+                }
+            }
+        }
+        return encoded;
     }
 
     /** 读取证书：命中则回填 txHash / blockIndex */
@@ -514,12 +523,8 @@ public class WebaseChainGateway implements ChainGateway {
             cert.setTxHash(cached.get().txHash());
             cert.setBlockIndex(cached.get().blockNumber());
         } else if (cert.getCreatedBlock() != null) {
-            String txHash = eventsInRange(cert.getCreatedBlock(), cert.getCreatedBlock()).stream()
-                    .filter(e -> certId.equals(extractCertId(e)))
-                    .map(DecodedEventLogDto::transactionHash)
-                    .filter(java.util.Objects::nonNull)
-                    .findFirst()
-                    .orElse(null);
+            WebaseBlockDto block = fetchBlock(cert.getCreatedBlock());
+            String txHash = block == null ? null : certifyTxsInBlock(block).get(certId);
             fillTxInfo(cert, txHash);
             txLocator.remember(certId, txHash, cert.getCreatedBlock());
         }
@@ -531,47 +536,130 @@ public class WebaseChainGateway implements ChainGateway {
         cert.setBlockIndex(cert.getCreatedBlock());
     }
 
-    /** 事件日志查询（按区块区间），WeBASE 会按 ABI 解码 */
-    private List<DecodedEventLogDto> eventsInRange(long fromBlock, long toBlock) {
-        EventLogListRequest request = new EventLogListRequest();
-        request.setGroupId(groupId());
-        request.setContractAbi(abiLoader.load(properties.getContracts().getRegistry().getAbiLocation()));
-        request.setContractAddress(registryAddress());
-        request.setFromBlock(fromBlock);
-        request.setToBlock(toBlock);
-        try {
-            JsonNode response = client.post("/event/eventLogs/list", request);
-            JsonNode data = response == null ? null : response.get("data");
-            if (data == null || !data.isArray()) {
-                return List.of();
-            }
-            List<DecodedEventLogDto> result = new ArrayList<>();
-            for (JsonNode item : data) {
-                result.add(objectMapper.treeToValue(item, DecodedEventLogDto.class));
-            }
+    /**
+     * 区块内的认证交易。
+     *
+     * WeBASE 3.x 的 /event/eventLogs/list 是事件订阅 + 等待回调的实现，
+     * 超时即返回「已收到的部分结果」，同一区间多次查询条数不一致，不能作为可靠检索手段；
+     * 因此这里改为本地解析区块交易的 input：仅当目标是存证合约且选择器为 certify 时才算认证交易，
+     * 展示字段也一并从入参解出，避免逐笔回链查询（单次合约只读调用约 2 秒）。
+     */
+    private List<CertifyTx> certifyTxs(WebaseBlockDto block) {
+        List<CertifyTx> result = new ArrayList<>();
+        JsonNode transactions = block.getTransactions();
+        if (transactions == null || !transactions.isArray()) {
             return result;
-        } catch (Exception e) {
-            // 事件反查失败不影响核验主流程，退化为「无交易哈希」
-            log.warn("链上事件日志查询失败（区块 {}~{}）：{}", fromBlock, toBlock, e.getMessage());
-            return List.of();
         }
+        String expectedTo = normalizeHash(registryAddress());
+        for (JsonNode tx : transactions) {
+            if (tx == null || !tx.isObject() || !expectedTo.equals(normalizeHash(text(tx, "to")))) {
+                continue;
+            }
+            CertifyTx certifyTx = decodeCertifyCall(text(tx, "hash"), text(tx, "input"));
+            if (certifyTx != null) {
+                result.add(certifyTx);
+            }
+        }
+        return result;
+    }
+
+    /** 区块内认证交易的 certId → txHash 映射 */
+    private Map<String, String> certifyTxsInBlock(WebaseBlockDto block) {
+        Map<String, String> result = new HashMap<>();
+        for (CertifyTx tx : certifyTxs(block)) {
+            result.put(tx.certId(), tx.txHash());
+        }
+        return result;
     }
 
     /**
-     * 从解码后的事件参数中识别认证编号。
-     * indexed 参数在各版本中的排布位置不一致，因此在全部参数中按编号形态匹配，保证兼容。
+     * 解出 certify 调用的入参。参数顺序见 CarbonCertRegistry.certify：
+     * (string certId, string enterpriseId, string enterpriseName, string period,
+     *  uint256 amountScaled, string fingerprint, string auditor, uint256 complianceFlags)
+     * 非 certify 交易返回 null。
      */
-    private String extractCertId(DecodedEventLogDto event) {
-        JsonNode data = event.getData();
-        if (data == null || !data.isArray()) {
+    private CertifyTx decodeCertifyCall(String txHash, String input) {
+        String selector = certifySelector();
+        if (input == null || selector == null) {
             return null;
         }
-        for (JsonNode node : data) {
-            if (node != null && node.isTextual() && CERT_ID_PATTERN.matcher(node.asText()).matches()) {
-                return node.asText();
+        String hex = input.startsWith("0x") || input.startsWith("0X") ? input.substring(2) : input;
+        if (hex.length() < 8 || !hex.regionMatches(true, 0, selector, 0, 8)) {
+            return null;
+        }
+        String args = hex.substring(8);
+        String certId = decodeString(args, 0);
+        if (certId == null || !CERT_ID_PATTERN.matcher(certId).matches()) {
+            return null;
+        }
+        return new CertifyTx(txHash, certId, decodeString(args, 1), decodeString(args, 2),
+                decodeString(args, 3), decodeUint(args, 4), decodeString(args, 5), decodeString(args, 6));
+    }
+
+    /** 从 certify 调用的 input 中解出认证编号（历史交易按交易哈希核验时使用） */
+    private String certifyCertId(String input) {
+        CertifyTx tx = decodeCertifyCall(null, input);
+        return tx == null ? null : tx.certId();
+    }
+
+    /** certify 函数选择器：从 ABI 现算，避免合约参数调整后与常量漂移 */
+    private String certifySelector() {
+        if (certifySelectorCache != null) {
+            return certifySelectorCache;
+        }
+        JsonNode abi = abiLoader.load(properties.getContracts().getRegistry().getAbiLocation());
+        if (abi == null || !abi.isArray()) {
+            return null;
+        }
+        for (JsonNode item : abi) {
+            if (!"function".equals(text(item, "type")) || !"certify".equals(text(item, "name"))) {
+                continue;
             }
+            List<String> types = new ArrayList<>();
+            for (JsonNode input : item.path("inputs")) {
+                types.add(input.path("type").asText());
+            }
+            certifySelectorCache = Keccak256.selector("certify(" + String.join(",", types) + ")");
+            return certifySelectorCache;
         }
         return null;
+    }
+
+    /** 解码 ABI 参数区中第 slot 个 string（该槽位是偏移量，指向 长度+内容） */
+    private static String decodeString(String argsHex, int slot) {
+        if (argsHex == null || argsHex.length() < (slot + 1) * 64) {
+            return null;
+        }
+        try {
+            int offset = Integer.parseInt(argsHex.substring(slot * 64, slot * 64 + 64), 16);
+            if (offset < 0 || (long) (offset + 32) * 2 > argsHex.length()) {
+                return null;
+            }
+            int length = Integer.parseInt(argsHex.substring(offset * 2, offset * 2 + 64), 16);
+            if (length <= 0 || length > 512 || (long) (offset + 32 + length) * 2 > argsHex.length()) {
+                return null;
+            }
+            byte[] bytes = new byte[length];
+            for (int i = 0; i < length; i++) {
+                int start = (offset + 32 + i) * 2;
+                bytes[i] = (byte) Integer.parseInt(argsHex.substring(start, start + 2), 16);
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 解码 ABI 参数区中第 slot 个 uint256（金额等数值都落在 long 范围内，取低 64 位） */
+    private static long decodeUint(String argsHex, int slot) {
+        if (argsHex == null || argsHex.length() < (slot + 1) * 64) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(argsHex.substring(slot * 64 + 48, slot * 64 + 64), 16);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** 链上 12 元组 → 证书对象（顺序即对外契约，见 CarbonCertRegistry.getByCertId 注释） */
@@ -581,15 +669,15 @@ public class WebaseChainGateway implements ChainGateway {
         cert.setStatus(ChainCertStatus.fromCode((int) num(values, 1)));
         cert.setCreatedBlock(num(values, 2));
         cert.setCreatedAt(num(values, 3));
-        cert.setCertId(text(values, 4));
-        cert.setEmissionId(text(values, 4));
-        cert.setEnterpriseId(text(values, 5));
-        cert.setEnterpriseName(text(values, 6));
-        cert.setPeriod(text(values, 7));
+        cert.setCertId(unquote(text(values, 4)));
+        cert.setEmissionId(unquote(text(values, 4)));
+        cert.setEnterpriseId(unquote(text(values, 5)));
+        cert.setEnterpriseName(unquote(text(values, 6)));
+        cert.setPeriod(unquote(text(values, 7)));
         cert.setAmount(AmountCodec.fromScaled(num(values, 8)));
-        cert.setFingerprint(text(values, 9));
-        cert.setAuditor(text(values, 10));
-        cert.setReason(text(values, 11));
+        cert.setFingerprint(unquote(text(values, 9)));
+        cert.setAuditor(unquote(text(values, 10)));
+        cert.setReason(unquote(text(values, 11)));
         if (!cert.isExists()) {
             cert.setStatus(ChainCertStatus.NONE);
         }
@@ -622,8 +710,9 @@ public class WebaseChainGateway implements ChainGateway {
         return address == null ? "" : address.trim();
     }
 
-    private int groupId() {
-        return properties.getWebase().getGroupId();
+    private String groupId() {
+        String value = properties.getWebase().getGroupId();
+        return value == null || value.isBlank() ? "group0" : value.trim();
     }
 
     private String signUserId() {
@@ -638,6 +727,21 @@ public class WebaseChainGateway implements ChainGateway {
 
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * WeBASE 3.x 把每个返回值先序列化成 JSON 文本再放进数组，
+     * 字符串因此会多一层引号（"\"CR000001\""），取出时统一还原为原始内容。
+     */
+    private String unquote(String value) {
+        if (value == null || value.length() < 2 || !value.startsWith("\"")) {
+            return value;
+        }
+        try {
+            return objectMapper.readValue(value, String.class);
+        } catch (Exception e) {
+            return value;
+        }
     }
 
     private static String normalizeHash(String value) {

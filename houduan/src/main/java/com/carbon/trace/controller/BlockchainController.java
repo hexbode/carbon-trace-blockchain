@@ -22,9 +22,9 @@ public class BlockchainController {
         this.blockchainService = blockchainService;
     }
 
-    /** 最近若干区块（含交易明细），limit 默认 20 */
+    /** 最近若干区块（含交易明细）；limit 不传时取配置 carbon.chain.block-list-limit */
     @GetMapping
-    public List<Map<String, Object>> list(@RequestParam(defaultValue = "20") int limit) {
+    public List<Map<String, Object>> list(@RequestParam(defaultValue = "0") int limit) {
         return blockchainService.listBlocks(limit);
     }
 

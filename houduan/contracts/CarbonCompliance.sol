@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.6.10;
+pragma solidity >=0.8.11 <0.9.0;
 
 /**
  * 碳链通 · 排放合规判定合约
@@ -69,7 +69,7 @@ contract CarbonCompliance {
         _;
     }
 
-    constructor() public {
+    constructor() {
         owner = msg.sender;
         writers[msg.sender] = true;
         emit WriterChanged(msg.sender, true);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.6.10;
+pragma solidity >=0.8.11 <0.9.0;
 pragma experimental ABIEncoderV2;
 
 /**
@@ -70,7 +70,7 @@ contract CarbonCertRegistry {
     /**
      * @param initialWriters 初始写入方地址（业务后端账户、部署账户等）
      */
-    constructor(address[] memory initialWriters) public {
+    constructor(address[] memory initialWriters) {
         owner = msg.sender;
         writers[msg.sender] = true;
         emit WriterChanged(msg.sender, true);

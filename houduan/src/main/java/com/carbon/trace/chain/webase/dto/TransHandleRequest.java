@@ -18,7 +18,8 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TransHandleRequest {
 
-    private Integer groupId;
+    /** 群组标识：WeBASE 1.5.x 为 "1"，WeBASE 3.x 为 "group0" */
+    private String groupId;
 
     /** 本地私钥模式：Front 中的用户地址 */
     private String user;
@@ -32,8 +33,16 @@ public class TransHandleRequest {
 
     private String funcName;
 
-    /** 入参列表，按合约函数参数顺序 */
-    private List<Object> funcParam = new ArrayList<>();
+    /**
+     * 入参列表，按合约函数参数顺序。
+     *
+     * WeBASE 3.x 要求每个元素是参数的 JSON 字面量字符串：
+     *  - 数字 → "1000"；布尔 → "true"；
+     *  - 字符串 → "\"abc\""（带引号）；
+     *  - 数组 → "[\"0x...\"]"。
+     * 由 WebaseChainGateway#encodeFuncParams 统一转换。
+     */
+    private List<String> funcParam = new ArrayList<>();
 
     /** 合约 ABI（JSON 数组），WeBASE 用它完成入参编码与返回值解码 */
     private JsonNode contractAbi;

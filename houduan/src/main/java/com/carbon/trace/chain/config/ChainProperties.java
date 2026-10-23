@@ -48,8 +48,13 @@ public class ChainProperties {
         /** WeBASE-Front 上下文路径 */
         private String contextPath = "/WeBASE-Front";
 
-        /** 群组编号 */
-        private int groupId = 1;
+        /**
+         * 群组标识。
+         *
+         * WeBASE 1.5.x（FISCO BCOS 2.x）为数字，如 "1"；
+         * WeBASE 3.x（FISCO BCOS 3.x）为 "group0"。两者都按字符串下发，避免版本差异。
+         */
+        private String groupId = "group0";
 
         /** WeBASE-Sign 托管用户（生产推荐，私钥不出 Sign 服务） */
         private String signUserId = "";
