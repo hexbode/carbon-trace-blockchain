@@ -176,16 +176,15 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         record.setReporter(reporter);
         // 电子防伪码：12 位随机字符串（大小写字母 + 数字）
         record.setFingerprint(BlockchainUtil.generateAntiFakeCode());
-        // 编号是「查总数 + 跳过占用」的读改写序列，并发填报必须串行取号并落库，否则会撞主键
-        synchronized (recordIdLock) {
-            record.setId(nextRecordId());
-            try {
-                emissionRecordMapper.insert(record);
-            } catch (DuplicateKeyException e) {
-                log.warn("排放编号 {} 已被占用，重新取号后重试", record.getId());
-                record.setId(nextRecordId());
-                emissionRecordMapper.insert(record);
-            }
+        // 取号（计数器 + 库内占用检查在锁内，毫秒级；链上占用检查在锁外，避免串行化慢调用）
+        record.setId(allocateRecordId());
+        try {
+            emissionRecordMapper.insert(record);
+        } catch (DuplicateKeyException e) {
+            // 多实例/外部写入场景：编号被他人抢先占用，重新取号后重试一次
+            log.warn("排放编号 {} 已被占用，重新取号后重试", record.getId());
+            record.setId(allocateRecordId());
+            emissionRecordMapper.insert(record);
         }
 
         // 同步生成报告提交记录（编号与排放记录一致，三表同号）
@@ -242,30 +241,43 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
     }
 
     /**
-     * 生成统一编号：CR + 6 位序号。
-     * 排放记录、报告记录、认证记录三表共用同一编号，因此需同时避开三张表中已占用的编号；
-     * 此外还要避开**链上已存在的编号**：链上只追加不删除，编号一旦上链（即使业务记录已被删除）
-     * 也不能复用，否则新认证会与链上遗留的「已撤销 / 已作废」存证同号而无法上链。
+     * 分配一个未被占用的编号。
+     *
+     * 分两段执行，避免把慢调用放进锁里：
+     *  1. 计数器取号 + 三张同号表占用检查（{@link #nextUnusedId()}，锁内，毫秒级）；
+     *  2. 链上占用检查（锁外，单次约 2 秒）——链上只追加不删除，编号一旦上链就不能复用，
+     *     否则新认证会与链上遗留的「已撤销 / 已作废」存证同号而无法上链。
      *
      * 取号用进程内自增计数器而不是 selectCount：并发事务彼此看不到对方未提交的插入，
      * 按总数推算会让多个请求算出同一个编号并撞主键（实测 6 并发只成功 1 个）。
      */
-    private String nextRecordId() {
-        long seq = recordSeq.get();
-        if (seq < 0) {
-            // 首次使用时以业务库现有最大编号为起点（之后只增不减，天然满足「编号不复用」）
-            recordSeq.compareAndSet(-1L, maxExistingSeq());
-            seq = recordSeq.get();
+    private String allocateRecordId() {
+        while (true) {
+            String id = nextUnusedId();
+            if (chainGateway.findByEmissionId(id).isEmpty()) {
+                return id;
+            }
         }
-        String id;
-        do {
-            seq = recordSeq.incrementAndGet();
-            id = "CR" + String.format("%06d", seq);
-        } while (emissionRecordMapper.selectById(id) != null
-                || reportRecordMapper.selectById(id) != null
-                || certificationRecordMapper.selectById(id) != null
-                || chainGateway.findByEmissionId(id).isPresent());
-        return id;
+    }
+
+    /** 计数器取号，并跳过排放/报告/认证三张表已占用的编号（必须在锁内调用） */
+    private String nextUnusedId() {
+        synchronized (recordIdLock) {
+            long seq = recordSeq.get();
+            if (seq < 0) {
+                // 首次使用时以业务库现有最大编号为起点（之后只增不减，天然满足「编号不复用」）
+                recordSeq.compareAndSet(-1L, maxExistingSeq());
+                seq = recordSeq.get();
+            }
+            String id;
+            do {
+                seq = recordSeq.incrementAndGet();
+                id = "CR" + String.format("%06d", seq);
+            } while (emissionRecordMapper.selectById(id) != null
+                    || reportRecordMapper.selectById(id) != null
+                    || certificationRecordMapper.selectById(id) != null);
+            return id;
+        }
     }
 
     /**
