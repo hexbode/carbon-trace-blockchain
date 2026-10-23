@@ -3,6 +3,7 @@ package com.carbon.trace.controller;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.common.LoginUser;
 import com.carbon.trace.common.UserContext;
+import com.carbon.trace.common.UserScopes;
 import com.carbon.trace.entity.ReportRecord;
 import com.carbon.trace.service.ReportRecordService;
 import org.springframework.http.HttpStatus;
@@ -34,12 +35,16 @@ public class ReportRecordController {
     public List<ReportRecord> list(@RequestParam(required = false) String enterpriseId,
                                    @RequestParam(required = false) String status,
                                    @RequestParam(required = false) String keyword) {
+        // 企业端只能看自己的报告记录
+        enterpriseId = UserScopes.scopedEnterpriseId(enterpriseId);
         return reportRecordService.list(enterpriseId, status, keyword);
     }
 
     @GetMapping("/{id}")
     public ReportRecord get(@PathVariable String id) {
-        return reportRecordService.getById(id);
+        ReportRecord record = reportRecordService.getById(id);
+        UserScopes.requireOwnership(record == null ? null : record.getEnterpriseId(), "查看其他企业的报告记录");
+        return record;
     }
 
     /** 审核：body {result:'certified'|'rejected', opinion} */
@@ -53,6 +58,8 @@ public class ReportRecordController {
     @PutMapping("/{id}/apply")
     public ReportRecord apply(@PathVariable String id) {
         requireEnterpriseRole();
+        ReportRecord record = reportRecordService.getById(id);
+        UserScopes.requireOwnership(record == null ? null : record.getEnterpriseId(), "对其他企业的报告发起认证申请");
         return reportRecordService.apply(id);
     }
 

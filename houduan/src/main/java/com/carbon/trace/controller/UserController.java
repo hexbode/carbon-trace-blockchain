@@ -39,6 +39,8 @@ public class UserController {
     @GetMapping
     public List<User> list(@RequestParam(required = false) String username,
                            @RequestParam(required = false) String role) {
+        // 用户目录含账号、联系方式等信息，仅监管/管理员可查
+        requireManagerRole();
         return userService.list(username, role);
     }
 

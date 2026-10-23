@@ -3,6 +3,7 @@ package com.carbon.trace.controller;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.common.LoginUser;
 import com.carbon.trace.common.UserContext;
+import com.carbon.trace.common.UserScopes;
 import com.carbon.trace.entity.EmissionRecord;
 import com.carbon.trace.service.EmissionRecordService;
 import org.springframework.http.HttpStatus;
@@ -38,12 +39,16 @@ public class EmissionRecordController {
                                      @RequestParam(required = false) String sourceCode,
                                      @RequestParam(required = false) String status,
                                      @RequestParam(required = false) String keyword) {
+        // 企业端只能看自己企业的数据（忽略请求里的 enterpriseId）
+        enterpriseId = UserScopes.scopedEnterpriseId(enterpriseId);
         return emissionRecordService.list(enterpriseId, period, sourceCode, status, keyword);
     }
 
     @GetMapping("/{id}")
     public EmissionRecord get(@PathVariable String id) {
-        return emissionRecordService.getById(id);
+        EmissionRecord record = emissionRecordService.getById(id);
+        UserScopes.requireOwnership(record == null ? null : record.getEnterpriseId(), "查看其他企业的排放记录");
+        return record;
     }
 
     /** 新增填报：body {enterpriseId, enterpriseName, period, sourceCode, activityData} */
@@ -56,6 +61,8 @@ public class EmissionRecordController {
     @DeleteMapping("/{id}")
     public Map<String, Object> delete(@PathVariable String id) {
         requireEnterpriseRole();
+        EmissionRecord record = emissionRecordService.getById(id);
+        UserScopes.requireOwnership(record == null ? null : record.getEnterpriseId(), "删除其他企业的排放记录");
         emissionRecordService.delete(id);
         return Collections.emptyMap();
     }

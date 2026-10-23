@@ -3,6 +3,7 @@ package com.carbon.trace.controller;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.common.LoginUser;
 import com.carbon.trace.common.UserContext;
+import com.carbon.trace.common.UserScopes;
 import com.carbon.trace.entity.CertificationRecord;
 import com.carbon.trace.service.CertificationService;
 import org.springframework.http.HttpStatus;
@@ -34,6 +35,8 @@ public class CertificationController {
     public List<CertificationRecord> list(@RequestParam(required = false) String enterpriseId,
                                           @RequestParam(required = false) String status,
                                           @RequestParam(required = false) String keyword) {
+        // 企业端只能看自己的认证记录（忽略请求里的 enterpriseId）
+        enterpriseId = UserScopes.scopedEnterpriseId(enterpriseId);
         return certificationService.list(enterpriseId, status, keyword);
     }
 
@@ -52,7 +55,10 @@ public class CertificationController {
 
     @GetMapping("/{id}")
     public CertificationRecord get(@PathVariable String id) {
-        return certificationService.getById(id);
+        CertificationRecord record = certificationService.getById(id);
+        // 企业端只能查看归属自己的认证记录
+        UserScopes.requireOwnership(record == null ? null : record.getEnterpriseId(), "查看其他企业的认证记录");
+        return record;
     }
 
     /** 撤销认证：body {reason, detail} */

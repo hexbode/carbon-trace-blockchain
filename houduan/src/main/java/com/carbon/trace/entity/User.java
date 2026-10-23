@@ -3,6 +3,7 @@ package com.carbon.trace.entity;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -21,7 +22,11 @@ public class User {
     /** 登录账号 */
     private String username;
 
-    /** 登录密码（演示用明文） */
+    /**
+     * 登录密码（演示用明文）。
+     * WRITE_ONLY：允许通过请求体写入（新建/重置），但任何接口响应都不再输出密码。
+     */
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
 
     /** 姓名 */

@@ -308,16 +308,4 @@ public class CertificationServiceImpl implements CertificationService {
             record.setBlockIndex(entry.blockNumber() == null ? null : entry.blockNumber().intValue());
         }
     }
-
-    /** 用链上凭证回填单条认证记录的防伪码、交易哈希与所在区块 */
-    private void applyChainInfo(CertificationRecord record, ChainCertificate chainCert) {
-        if (record == null || chainCert == null || !chainCert.isExists()) {
-            return;
-        }
-        if (StringUtils.hasText(chainCert.getFingerprint())) {
-            record.setFingerprint(chainCert.getFingerprint());
-        }
-        record.setTxHash(chainCert.getTxHash());
-        record.setBlockIndex(chainCert.getBlockIndex() == null ? null : chainCert.getBlockIndex().intValue());
-    }
 }

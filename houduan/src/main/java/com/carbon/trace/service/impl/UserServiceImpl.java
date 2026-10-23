@@ -79,8 +79,35 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public User update(Integer id, User user) {
-        user.setId(id);
-        userMapper.updateById(user);
+        User current = getById(id);
+        LoginUser operator = UserContext.get();
+        boolean manager = operator != null
+                && ("admin".equals(operator.getRole()) || "regulator".equals(operator.getRole()));
+
+        // 白名单更新，防止通过本接口提权或篡改账号凭据：
+        //  - 任何角色只能改资料展示字段；
+        //  - 仅监管/管理员可改 role 与 status；
+        //  - username / password / enterpriseId / orgId 一律不可通过本接口修改（密码走 changePassword）。
+        current.setName(user.getName());
+        current.setPhone(user.getPhone());
+        current.setEmail(user.getEmail());
+        current.setSignature(user.getSignature());
+        current.setAvatar(user.getAvatar());
+        if (manager) {
+            if (user.getRole() != null) {
+                current.setRole(user.getRole());
+            }
+            if (user.getStatus() != null) {
+                current.setStatus(user.getStatus());
+            }
+            if (user.getEnterpriseId() != null) {
+                current.setEnterpriseId(user.getEnterpriseId());
+            }
+            if (user.getOrgId() != null) {
+                current.setOrgId(user.getOrgId());
+            }
+        }
+        userMapper.updateById(current);
         return getById(id);
     }
 
@@ -111,6 +138,9 @@ public class UserServiceImpl implements UserService {
         // 旧密码需与数据库当前值一致
         if (!Objects.equals(user.getPassword(), oldPassword)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "当前密码不正确");
+        }
+        if (!StringUtils.hasText(newPassword) || newPassword.trim().length() < 6) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "新密码不能为空且长度不能少于 6 位");
         }
         user.setPassword(newPassword);
         userMapper.updateById(user);
