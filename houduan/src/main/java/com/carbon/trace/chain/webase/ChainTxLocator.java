@@ -39,6 +39,24 @@ public class ChainTxLocator {
         return certId == null ? Optional.empty() : Optional.ofNullable(byCertId.get(certId));
     }
 
+    /** 批量取缓存（列表页不回链，只回填本地已知交易哈希/区块高度） */
+    public java.util.Map<String, Entry> lookupAll(java.util.Collection<String> certIds) {
+        java.util.Map<String, Entry> found = new java.util.HashMap<>();
+        if (certIds == null) {
+            return found;
+        }
+        for (String certId : certIds) {
+            if (certId == null) {
+                continue;
+            }
+            Entry entry = byCertId.get(certId);
+            if (entry != null) {
+                found.put(certId, entry);
+            }
+        }
+        return found;
+    }
+
     public Optional<String> certIdByTxHash(String txHash) {
         if (txHash == null) {
             return Optional.empty();

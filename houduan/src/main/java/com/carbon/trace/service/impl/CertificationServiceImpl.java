@@ -5,6 +5,7 @@ import com.carbon.trace.chain.ChainGateway;
 import com.carbon.trace.chain.model.ChainCertStatus;
 import com.carbon.trace.chain.model.ChainCertificate;
 import com.carbon.trace.chain.model.CertifyCommand;
+import com.carbon.trace.chain.webase.ChainTxLocator;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.common.UserContext;
 import com.carbon.trace.entity.CertificationRecord;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,15 +47,18 @@ public class CertificationServiceImpl implements CertificationService {
     private final ChainGateway chainGateway;
     private final ChainSyncService chainSyncService;
     private final ComplianceService complianceService;
+    private final ChainTxLocator txLocator;
 
     public CertificationServiceImpl(CertificationRecordMapper certificationRecordMapper,
                                     ChainGateway chainGateway,
                                     ChainSyncService chainSyncService,
-                                    ComplianceService complianceService) {
+                                    ComplianceService complianceService,
+                                    ChainTxLocator txLocator) {
         this.certificationRecordMapper = certificationRecordMapper;
         this.chainGateway = chainGateway;
         this.chainSyncService = chainSyncService;
         this.complianceService = complianceService;
+        this.txLocator = txLocator;
     }
 
     @Override
@@ -72,7 +77,9 @@ public class CertificationServiceImpl implements CertificationService {
         }
         wrapper.orderByDesc(CertificationRecord::getCertifiedAt);
         List<CertificationRecord> list = certificationRecordMapper.selectList(wrapper);
-        fillChainInfo(list);
+        // 列表不再逐条回链（52 条 × 2 秒 ≈ 112 秒，远超前端 15 秒超时）；
+        // 链上交易哈希/区块高度仅从本地缓存回填，实时链上数据见单条详情与核验接口
+        fillChainInfoFromCache(list);
         return list;
     }
 
@@ -276,5 +283,41 @@ public class CertificationServiceImpl implements CertificationService {
         for (CertificationRecord record : records) {
             applyChainInfo(record, chainCertByEmission.get(record.getEmissionId()));
         }
+    }
+
+    /** 列表场景：只从本地定位缓存回填交易哈希/区块高度，绝不回链 */
+    private void fillChainInfoFromCache(List<CertificationRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        List<String> emissionIds = records.stream()
+                .map(CertificationRecord::getEmissionId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        if (emissionIds.isEmpty()) {
+            return;
+        }
+        Map<String, ChainTxLocator.Entry> cached = txLocator.lookupAll(emissionIds);
+        for (CertificationRecord record : records) {
+            ChainTxLocator.Entry entry = cached.get(record.getEmissionId());
+            if (entry == null) {
+                continue;
+            }
+            record.setTxHash(entry.txHash());
+            record.setBlockIndex(entry.blockNumber() == null ? null : entry.blockNumber().intValue());
+        }
+    }
+
+    /** 用链上凭证回填单条认证记录的防伪码、交易哈希与所在区块 */
+    private void applyChainInfo(CertificationRecord record, ChainCertificate chainCert) {
+        if (record == null || chainCert == null || !chainCert.isExists()) {
+            return;
+        }
+        if (StringUtils.hasText(chainCert.getFingerprint())) {
+            record.setFingerprint(chainCert.getFingerprint());
+        }
+        record.setTxHash(chainCert.getTxHash());
+        record.setBlockIndex(chainCert.getBlockIndex() == null ? null : chainCert.getBlockIndex().intValue());
     }
 }
