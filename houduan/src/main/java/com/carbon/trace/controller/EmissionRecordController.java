@@ -55,6 +55,14 @@ public class EmissionRecordController {
     @PostMapping
     public EmissionRecord create(@RequestBody Map<String, Object> body) {
         requireEnterpriseRole();
+        // 企业端只能为自己企业填报（攻击验证：曾可通过伪造 enterpriseId 替别的企业创建记录/报告）
+        if (UserScopes.isEnterprise()) {
+            String claimed = body.get("enterpriseId") == null ? null : String.valueOf(body.get("enterpriseId"));
+            String mine = UserContext.get().getEnterpriseId();
+            if (!mine.equals(claimed)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "只能为本企业填报排放数据");
+            }
+        }
         return emissionRecordService.create(body);
     }
 
