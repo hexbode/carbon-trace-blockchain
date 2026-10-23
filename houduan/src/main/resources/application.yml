@@ -31,7 +31,9 @@ mybatis-plus:
 # 自定义配置
 carbon:
   jwt:
-    secret: carbon-trace-chain-2024-jwt-secret-key-please-change-0123456789abcdef
+    # 生产/演示环境必须通过环境变量 CARBON_JWT_SECRET 覆盖（见 Ubuntu 部署配置）；
+    # 仓库中的默认值仅用于本地开发，任何拿到源码的人都能用它伪造令牌
+    secret: ${CARBON_JWT_SECRET:carbon-trace-chain-2024-jwt-secret-key-please-change-0123456789abcdef}
     expire-hours: 24
   # 上传文件保存目录（相对后端项目根目录），通过 /uploads/** 对外访问
   upload:
