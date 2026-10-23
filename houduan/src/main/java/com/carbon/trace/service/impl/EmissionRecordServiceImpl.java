@@ -19,6 +19,9 @@ import com.carbon.trace.service.AlertService;
 import com.carbon.trace.service.ChainSyncService;
 import com.carbon.trace.service.ComplianceService;
 import com.carbon.trace.service.EmissionRecordService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,7 +45,21 @@ import java.util.Map;
 @Service
 public class EmissionRecordServiceImpl implements EmissionRecordService {
 
+    private static final Logger log = LoggerFactory.getLogger(EmissionRecordServiceImpl.class);
+
     private static final String UNIT = "tCO₂";
+
+    /**
+     * 取号与落库的互斥锁。
+     * 编号由「查占用 + 取下一个」得出，并发填报若不加锁会算出同一个编号，
+     * 后插入者撞主键并向前端返回「数据已存在」（实测 6 并发有 5 个失败）。
+     * 锁只覆盖取号与插入这一小段；跨实例场景由 DuplicateKeyException 重试兜底。
+     */
+    private final Object recordIdLock = new Object();
+
+    /** 编号自增计数器：-1 表示尚未初始化，首次取号时以业务库现有最大编号为起点 */
+    private final java.util.concurrent.atomic.AtomicLong recordSeq =
+            new java.util.concurrent.atomic.AtomicLong(-1L);
 
     private final EmissionRecordMapper emissionRecordMapper;
     private final EmissionSourceMapper emissionSourceMapper;
@@ -144,7 +161,6 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         String reporter = UserContext.currentName();
 
         EmissionRecord record = new EmissionRecord();
-        record.setId(nextRecordId());
         record.setEnterpriseId(enterpriseId);
         record.setEnterpriseName(enterpriseName);
         record.setPeriod(period);
@@ -160,7 +176,17 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         record.setReporter(reporter);
         // 电子防伪码：12 位随机字符串（大小写字母 + 数字）
         record.setFingerprint(BlockchainUtil.generateAntiFakeCode());
-        emissionRecordMapper.insert(record);
+        // 编号是「查总数 + 跳过占用」的读改写序列，并发填报必须串行取号并落库，否则会撞主键
+        synchronized (recordIdLock) {
+            record.setId(nextRecordId());
+            try {
+                emissionRecordMapper.insert(record);
+            } catch (DuplicateKeyException e) {
+                log.warn("排放编号 {} 已被占用，重新取号后重试", record.getId());
+                record.setId(nextRecordId());
+                emissionRecordMapper.insert(record);
+            }
+        }
 
         // 同步生成报告提交记录（编号与排放记录一致，三表同号）
         ReportRecord report = new ReportRecord();
@@ -220,18 +246,63 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
      * 排放记录、报告记录、认证记录三表共用同一编号，因此需同时避开三张表中已占用的编号；
      * 此外还要避开**链上已存在的编号**：链上只追加不删除，编号一旦上链（即使业务记录已被删除）
      * 也不能复用，否则新认证会与链上遗留的「已撤销 / 已作废」存证同号而无法上链。
+     *
+     * 取号用进程内自增计数器而不是 selectCount：并发事务彼此看不到对方未提交的插入，
+     * 按总数推算会让多个请求算出同一个编号并撞主键（实测 6 并发只成功 1 个）。
      */
     private String nextRecordId() {
-        long seq = emissionRecordMapper.selectCount(null);
+        long seq = recordSeq.get();
+        if (seq < 0) {
+            // 首次使用时以业务库现有最大编号为起点（之后只增不减，天然满足「编号不复用」）
+            recordSeq.compareAndSet(-1L, maxExistingSeq());
+            seq = recordSeq.get();
+        }
         String id;
         do {
-            seq++;
+            seq = recordSeq.incrementAndGet();
             id = "CR" + String.format("%06d", seq);
         } while (emissionRecordMapper.selectById(id) != null
                 || reportRecordMapper.selectById(id) != null
                 || certificationRecordMapper.selectById(id) != null
                 || chainGateway.findByEmissionId(id).isPresent());
         return id;
+    }
+
+    /**
+     * 三张同号表中已有的最大编号序号（编号零填充 6 位，按字符串倒序取首条即可）。
+     * 任一张表无数据时按 0 处理；编号格式异常同样按 0 处理，避免首次取号失败。
+     */
+    private long maxExistingSeq() {
+        List<EmissionRecord> emission = emissionRecordMapper.selectList(new LambdaQueryWrapper<EmissionRecord>()
+                .select(EmissionRecord::getId).orderByDesc(EmissionRecord::getId).last("limit 1"));
+        List<ReportRecord> report = reportRecordMapper.selectList(new LambdaQueryWrapper<ReportRecord>()
+                .select(ReportRecord::getId).orderByDesc(ReportRecord::getId).last("limit 1"));
+        List<CertificationRecord> certification = certificationRecordMapper
+                .selectList(new LambdaQueryWrapper<CertificationRecord>()
+                        .select(CertificationRecord::getId).orderByDesc(CertificationRecord::getId).last("limit 1"));
+        long max = 0L;
+        if (!emission.isEmpty()) {
+            max = Math.max(max, seqOf(emission.get(0).getId()));
+        }
+        if (!report.isEmpty()) {
+            max = Math.max(max, seqOf(report.get(0).getId()));
+        }
+        if (!certification.isEmpty()) {
+            max = Math.max(max, seqOf(certification.get(0).getId()));
+        }
+        return max;
+    }
+
+    /** 解析「CR000123」中的序号，非法格式返回 0 */
+    private static long seqOf(String id) {
+        if (id == null || id.length() <= 2) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(id.substring(2));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** 从排放因子单位中解析活动数据单位，如 tCO₂/t煤 → t煤 */

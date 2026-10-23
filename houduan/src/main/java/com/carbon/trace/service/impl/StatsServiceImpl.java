@@ -18,25 +18,31 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 // import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
  * 统计服务实现（数据量小，直接在内存中聚合）。
  * 面向各端首页图表，按角色分四个区块（监管端/企业端/审核端/公共端）从各 Mapper 全量读取后在内存聚合，
  * 不写库、不写链；金额统一经 {@link #scale} 保留 2 位小数，占比经 {@link #percent} 保留 1 位小数。
- * 趋势类指标固定采用 2024 年 12 个月维度（{@code MONTHS_2024}），月份缺数补 0。
+ * 趋势类指标的月份轴由数据中实际出现过的报告期决定（无数据时回退最近 12 个月），不再硬编码年份。
  */
 @Service
 public class StatsServiceImpl implements StatsService {
 
     private static final BigDecimal ZERO = BigDecimal.ZERO;
-    private static final List<String> MONTHS_2024 = buildMonths();
+
+    /** 报告期格式：yyyy-MM（月份限定 01~12），与 emission_records.period 的存储口径一致 */
+    private static final Pattern PERIOD_PATTERN = Pattern.compile("^\\d{4}-(0[1-9]|1[0-2])$");
 
     private final EnterpriseMapper enterpriseMapper;
     private final EmissionRecordMapper emissionRecordMapper;
@@ -209,33 +215,36 @@ public class StatsServiceImpl implements StatsService {
     public Map<String, Object> regulatorEnterpriseTrend() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
         Map<String, Enterprise> enterpriseMap = toEnterpriseMap(enterprises);
+        List<EmissionRecord> records = emissionRecordMapper.selectList(null);
+        // 月份轴取自真实数据：报告期升序去重（没有数据时回退最近 12 个月）
+        List<String> months = monthAxis(records.stream().map(EmissionRecord::getPeriod).toList());
 
         // 行业 -> 月份 -> 排放量
         Map<String, Map<String, BigDecimal>> seriesData = new LinkedHashMap<>();
+        Map<String, BigDecimal> zeros = emptyMonthMap(months);
         for (Enterprise enterprise : enterprises) {
-            seriesData.putIfAbsent(enterprise.getIndustry(), emptyMonthMap());
+            seriesData.putIfAbsent(enterprise.getIndustry(), new LinkedHashMap<>(zeros));
         }
-        for (EmissionRecord record : emissionRecordMapper.selectList(null)) {
+        for (EmissionRecord record : records) {
             Enterprise enterprise = enterpriseMap.get(record.getEnterpriseId());
-            if (enterprise == null || record.getPeriod() == null) {
+            if (enterprise == null || record.getPeriod() == null || !months.contains(record.getPeriod())) {
                 continue;
             }
-            Map<String, BigDecimal> monthMap = seriesData.computeIfAbsent(enterprise.getIndustry(), k -> emptyMonthMap());
-            if (monthMap.containsKey(record.getPeriod())) {
-                monthMap.merge(record.getPeriod(), nz(record.getAmount()), BigDecimal::add);
-            }
+            Map<String, BigDecimal> monthMap =
+                    seriesData.computeIfAbsent(enterprise.getIndustry(), k -> new LinkedHashMap<>(zeros));
+            monthMap.merge(record.getPeriod(), nz(record.getAmount()), BigDecimal::add);
         }
 
         List<Map<String, Object>> series = new ArrayList<>();
         seriesData.forEach((industry, monthMap) -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("name", industry);
-            item.put("data", MONTHS_2024.stream().map(m -> scale(monthMap.getOrDefault(m, ZERO))).collect(Collectors.toList()));
+            item.put("data", months.stream().map(m -> scale(monthMap.getOrDefault(m, ZERO))).collect(Collectors.toList()));
             series.add(item);
         });
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("months", MONTHS_2024);
+        result.put("months", months);
         result.put("series", series);
         return result;
     }
@@ -263,15 +272,17 @@ public class StatsServiceImpl implements StatsService {
     public Map<String, Object> enterpriseTrend(String enterpriseId) {
         List<EmissionRecord> records = emissionRecordMapper.selectList(
                 new LambdaQueryWrapper<EmissionRecord>().eq(EmissionRecord::getEnterpriseId, enterpriseId));
-        Map<String, BigDecimal> monthMap = emptyMonthMap();
+        // 月份轴取自该企业真实报告期；没有记录时回退最近 12 个月
+        List<String> months = monthAxis(records.stream().map(EmissionRecord::getPeriod).toList());
+        Map<String, BigDecimal> monthMap = emptyMonthMap(months);
         for (EmissionRecord record : records) {
             if (record.getPeriod() != null && monthMap.containsKey(record.getPeriod())) {
                 monthMap.merge(record.getPeriod(), nz(record.getAmount()), BigDecimal::add);
             }
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("months", MONTHS_2024);
-        result.put("data", MONTHS_2024.stream().map(m -> scale(monthMap.getOrDefault(m, ZERO))).collect(Collectors.toList()));
+        result.put("months", months);
+        result.put("data", months.stream().map(m -> scale(monthMap.getOrDefault(m, ZERO))).collect(Collectors.toList()));
         return result;
     }
 
@@ -462,10 +473,10 @@ public class StatsServiceImpl implements StatsService {
         return map;
     }
 
-    /** 按 2024 年 12 个月生成初始值为 0 的月度桶 */
-    private Map<String, BigDecimal> emptyMonthMap() {
+    /** 按给定月份轴生成初始值为 0 的月度桶 */
+    private Map<String, BigDecimal> emptyMonthMap(List<String> months) {
         Map<String, BigDecimal> map = new LinkedHashMap<>();
-        for (String month : MONTHS_2024) {
+        for (String month : months) {
             map.put(month, ZERO);
         }
         return map;
@@ -517,12 +528,25 @@ public class StatsServiceImpl implements StatsService {
         }
     }
 
-    /** 构造 2024-01 ~ 2024-12 的月份标签 */
-    private static List<String> buildMonths() {
-        List<String> months = new ArrayList<>();
-        for (int i = 1; i <= 12; i++) {
-            months.add("2024-" + String.format("%02d", i));
+    /**
+     * 趋势图月份轴：取数据中实际出现过的报告期（yyyy-MM）升序去重；
+     * 一条数据都没有时回退到截至当前月的最近 12 个月，保证图表仍有坐标轴。
+     */
+    private static List<String> monthAxis(Collection<String> periods) {
+        TreeSet<String> months = new TreeSet<>();
+        if (periods != null) {
+            for (String period : periods) {
+                if (period != null && PERIOD_PATTERN.matcher(period.trim()).matches()) {
+                    months.add(period.trim());
+                }
+            }
         }
-        return months;
+        if (months.isEmpty()) {
+            YearMonth current = YearMonth.now();
+            for (int i = 11; i >= 0; i--) {
+                months.add(current.minusMonths(i).toString());
+            }
+        }
+        return new ArrayList<>(months);
     }
 }

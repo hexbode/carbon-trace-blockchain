@@ -12,6 +12,7 @@ import com.carbon.trace.service.AlertService;
 import com.carbon.trace.service.ComplianceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -49,6 +50,24 @@ public class AlertServiceImpl implements AlertService {
 
     /** 迟报判定：报告期早于当前月份超过该月数即视为迟报（本地回退规则使用） */
     private static final long LATE_REPORT_MONTHS = 1;
+
+    /**
+     * 告警编号自增计数器：-1 表示尚未初始化，首次取号时以 alerts 表现有最大编号为起点。
+     *
+     * 不能用 selectCount 推算下一个编号：并发事务看不到对方尚未提交的插入，
+     * 多个请求会反复算出同一编号并撞主键（实测并发填报时 ALT015 重复插入）。
+     */
+    private final java.util.concurrent.atomic.AtomicLong alertSeq =
+            new java.util.concurrent.atomic.AtomicLong(-1L);
+
+    /**
+     * 取号、去重判定与插入的互斥锁。
+     *
+     * 告警编号是「查占用 + 取下一个」的读改写序列，多个请求并发填报时两个线程可能拿到同一个编号；
+     * 去重判定也需要与插入保持原子，否则并发下会写入同一告警的多条副本。
+     * 锁只保护极短的数据库写片段，跨实例场景由唯一键冲突重试兜底。
+     */
+    private final Object alertIdLock = new Object();
 
     private final AlertMapper alertMapper;
     private final EmissionRecordMapper emissionRecordMapper;
@@ -264,20 +283,13 @@ public class AlertServiceImpl implements AlertService {
      * 落库一条待处理告警。
      * 同一企业、同一报告期、同一类型且同一级别的告警只保留一条：
      * 既避免重复填报时堆叠完全相同的告警，又能保留同一期内不同级别的不同发现。
+     *
+     * 去重判定、取号与插入必须在同一把锁内完成，否则并发填报会出现重复告警或同号主键冲突；
+     * 锁只保护数据库写入的极短片段，不影响其它业务。
      */
     private void save(String enterpriseId, String enterpriseName, String period,
                       String type, String typeLabel, String level, String message) {
-        Long exists = alertMapper.selectCount(new LambdaQueryWrapper<Alert>()
-                .eq(Alert::getEnterpriseId, enterpriseId)
-                .eq(Alert::getPeriod, period)
-                .eq(Alert::getType, type)
-                .eq(Alert::getLevel, level));
-        if (exists != null && exists > 0) {
-            return;
-        }
-
         Alert alert = new Alert();
-        alert.setId(nextAlertId());
         alert.setEnterpriseId(enterpriseId);
         alert.setEnterpriseName(enterpriseName);
         alert.setType(type);
@@ -287,7 +299,33 @@ public class AlertServiceImpl implements AlertService {
         alert.setPeriod(period);
         alert.setStatus("pending");
         alert.setCreatedAt(LocalDateTime.now());
-        alertMapper.insert(alert);
+
+        synchronized (alertIdLock) {
+            Long exists = alertMapper.selectCount(new LambdaQueryWrapper<Alert>()
+                    .eq(Alert::getEnterpriseId, enterpriseId)
+                    .eq(Alert::getPeriod, period)
+                    .eq(Alert::getType, type)
+                    .eq(Alert::getLevel, level));
+            if (exists != null && exists > 0) {
+                return;
+            }
+            insertWithUniqueId(alert);
+        }
+    }
+
+    /**
+     * 取一个未被占用的编号并插入；若仍因唯一键冲突失败（多实例部署或外部写入），
+     * 重新取号重试一次，避免整笔业务因告警落库失败而回滚。
+     */
+    private void insertWithUniqueId(Alert alert) {
+        alert.setId(nextAlertId());
+        try {
+            alertMapper.insert(alert);
+        } catch (DuplicateKeyException e) {
+            log.warn("告警编号 {} 已被占用，重新取号后重试", alert.getId());
+            alert.setId(nextAlertId());
+            alertMapper.insert(alert);
+        }
     }
 
     /** 该企业早于本报告期、且最近的一个报告期（用于环比对比与文案展示） */
@@ -324,14 +362,41 @@ public class AlertServiceImpl implements AlertService {
                 .stripTrailingZeros().toPlainString();
     }
 
-    /** 生成告警编号：ALT + 3 位序号；基于总数递增，并循环跳过已被占用的编号 */
+    /**
+     * 生成告警编号：ALT + 3 位序号（超过 999 自动加宽）。
+     * 使用进程内自增计数器取号，并跳过已被占用的编号。
+     * 必须在持有 {@link #alertIdLock} 时调用，保证「取号 + 插入」对其他线程是原子的。
+     */
     private String nextAlertId() {
-        long seq = alertMapper.selectCount(null);
+        long seq = alertSeq.get();
+        if (seq < 0) {
+            alertSeq.compareAndSet(-1L, maxExistingAlertSeq());
+            seq = alertSeq.get();
+        }
         String id;
         do {
-            seq++;
+            seq = alertSeq.incrementAndGet();
             id = "ALT" + String.format("%03d", seq);
         } while (alertMapper.selectById(id) != null);
         return id;
+    }
+
+    /** alerts 表现有最大编号的序号（ALT### → 数字），无数据或格式异常返回 0 */
+    private long maxExistingAlertSeq() {
+        List<Alert> alerts = alertMapper.selectList(
+                new LambdaQueryWrapper<Alert>().select(Alert::getId));
+        long max = 0L;
+        for (Alert alert : alerts) {
+            String id = alert.getId();
+            if (id == null || id.length() <= 3) {
+                continue;
+            }
+            try {
+                max = Math.max(max, Long.parseLong(id.substring(3)));
+            } catch (NumberFormatException ignored) {
+                // 非标准编号忽略，不影响取号
+            }
+        }
+        return max;
     }
 }
