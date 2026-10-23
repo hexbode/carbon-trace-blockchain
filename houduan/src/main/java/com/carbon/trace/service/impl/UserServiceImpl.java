@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.common.JwtUtil;
 import com.carbon.trace.common.LoginUser;
+import com.carbon.trace.common.PasswordHasher;
 import com.carbon.trace.common.UserContext;
 import com.carbon.trace.entity.User;
 import com.carbon.trace.entity.UserSettings;
@@ -28,6 +29,16 @@ import java.util.Objects;
 public class UserServiceImpl implements UserService {
 
     private static final String DEFAULT_PASSWORD = "123456";
+
+    /** 登录失败锁定：同一账号连续失败上限 */
+    private static final int MAX_LOGIN_FAILURES = 5;
+    /** 达到上限后的锁定时长（毫秒） */
+    private static final long LOCK_MILLIS = 5 * 60_000L;
+
+    private final Map<String, LoginFail> loginFails = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record LoginFail(int count, long lockedUntil) {
+    }
 
     private final UserMapper userMapper;
     private final UserSettingsMapper userSettingsMapper;
@@ -64,7 +75,9 @@ public class UserServiceImpl implements UserService {
     @Override
     public User create(User user) {
         if (!StringUtils.hasText(user.getPassword())) {
-            user.setPassword(DEFAULT_PASSWORD);
+            user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
+        } else {
+            user.setPassword(PasswordHasher.encode(user.getPassword()));
         }
         if (!StringUtils.hasText(user.getStatus())) {
             user.setStatus("active");
@@ -127,23 +140,25 @@ public class UserServiceImpl implements UserService {
     @Override
     public User resetPassword(Integer id) {
         User user = getById(id);
-        user.setPassword(DEFAULT_PASSWORD);
+        user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
         userMapper.updateById(user);
+        loginFails.remove(user.getUsername());
         return user;
     }
 
     @Override
     public void changePassword(Integer id, String oldPassword, String newPassword) {
         User user = getById(id);
-        // 旧密码需与数据库当前值一致
-        if (!Objects.equals(user.getPassword(), oldPassword)) {
+        // 旧密码需与数据库当前值一致（兼容迁移前的明文与迁移后的 BCrypt）
+        if (!PasswordHasher.matches(oldPassword, user.getPassword())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "当前密码不正确");
         }
         if (!StringUtils.hasText(newPassword) || newPassword.trim().length() < 6) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "新密码不能为空且长度不能少于 6 位");
         }
-        user.setPassword(newPassword);
+        user.setPassword(PasswordHasher.encode(newPassword));
         userMapper.updateById(user);
+        loginFails.remove(user.getUsername());
     }
 
     @Override
@@ -156,14 +171,23 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public Map<String, Object> login(String username, String password, String role) {
+        // 登录失败锁定：同一账号连续失败 5 次锁 5 分钟（内存计数，重启即解锁）
+        LoginFail fail = loginFails.get(username);
+        if (fail != null && fail.lockedUntil() > System.currentTimeMillis()) {
+            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "失败次数过多，账号已临时锁定，请稍后再试");
+        }
+
         User user = findByUsername(username);
         // 账号 + 密码 + 角色 + 状态 四者都需匹配，失败返回 400（不能用 401）
         if (user == null
-                || !Objects.equals(user.getPassword(), password)
+                || !PasswordHasher.matches(password, user.getPassword())
                 || !Objects.equals(user.getRole(), role)
                 || !"active".equals(user.getStatus())) {
+            recordLoginFailure(username, fail);
             throw new ApiException(HttpStatus.BAD_REQUEST, "账号或密码错误，或角色不匹配");
         }
+        loginFails.remove(username);
+
         String token = jwtUtil.generateToken(user);
 
         Map<String, Object> userInfo = new LinkedHashMap<>();
@@ -177,6 +201,15 @@ public class UserServiceImpl implements UserService {
         result.put("token", token);
         result.put("user", userInfo);
         return result;
+    }
+
+    private void recordLoginFailure(String username, LoginFail fail) {
+        if (username == null) {
+            return;
+        }
+        int count = fail == null ? 1 : fail.count() + 1;
+        long lockedUntil = count >= MAX_LOGIN_FAILURES ? System.currentTimeMillis() + LOCK_MILLIS : 0L;
+        loginFails.put(username, new LoginFail(count, lockedUntil));
     }
 
     @Override
