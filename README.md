@@ -22,7 +22,7 @@
 | 层次 | 技术 |
 | --- | --- |
 | 前端 | Vue 3 + Vite 5 + Element Plus + ECharts + Pinia + Vue Router |
-| 后端 | Spring Boot 3.4.3 + MyBatis-Plus 3.5.9 + JDK 17 |
+| 后端 | Spring Boot 3.5.16 + MyBatis-Plus 3.5.9 + JDK 25 |
 | 数据库 | MySQL 8.x（库名 `carbon_emission`，utf8mb4） |
 | 区块链 | FISCO BCOS 3.x 联盟链 + WeBASE 3.1.1（WeBASE-Front / WeBASE-Sign）+ Solidity 0.8.x 智能合约 |
 | 链上调用 | SpringBoot → WeBASE-Front REST（`/trans/handle` 等），免 SDK 依赖 |
@@ -70,7 +70,7 @@
 
 ## 环境要求
 
-- **JDK 17**（后端构建请务必使用 17，详见"常见问题"）
+- **JDK 25**（Spring Boot 3.5 支持 Java 17–25；本项目以 25 构建与运行）
 - Maven（直接用项目自带的 `mvnw` / `mvnw.cmd` 即可）
 - Node.js 18+
 - MySQL 8.x
@@ -110,7 +110,7 @@ CREATE DATABASE carbon_emission DEFAULT CHARACTER SET utf8mb4;
 
 ```powershell
 cd houduan
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-17"   # 指向本机 JDK 17
+$env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-25.0.4.101-hotspot"   # 指向本机 JDK 25
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -222,7 +222,7 @@ powershell -ExecutionPolicy Bypass -File api-tests.ps1
 
 A：多为 Lombok 未生效或语言服务器状态问题，按以下顺序排查：
 
-1. 后端构建必须用 **JDK 17**。JDK 23+ 的 javac 默认不再执行 classpath 上的注解处理器，会导致 Lombok 不生成 `getter/setter`。
+1. 后端构建使用 **JDK 25**。JDK 23+ 的 javac 默认不再隐式执行 classpath 上的注解处理器；`pom.xml` 已为 `maven-compiler-plugin` 显式声明 Lombok 注解处理器（Lombok 1.18.48），无需额外参数。
 2. 若 IDE 仍报错，执行命令面板的 `Java: Clean Java Language Server Workspace` 后重载窗口。
 
 **Q：改了业务表里的电子防伪码，前端还能查到吗？**

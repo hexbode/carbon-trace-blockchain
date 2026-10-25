@@ -1,9 +1,9 @@
 ﻿# ============================================================
 # 碳链通 · 启动后端服务（Spring Boot，端口 8080）
 #
-# 说明：后端必须使用 JDK 17 构建。
+# 说明：后端使用 JDK 25 构建与运行（Spring Boot 3.5 支持 Java 17–25）。
 #       JDK 23+ 的 javac 默认不再执行 classpath 上的注解处理器，
-#       会导致 Lombok 不生成 getter/setter，编译失败。
+#       pom.xml 已显式声明 Lombok 注解处理器，无需额外参数。
 #
 # 链模式：默认 stub（离线开发桩，不需要 WeBASE，链上无真实存证）。
 #       接入真实联盟链请先设置环境变量再运行：
@@ -27,13 +27,14 @@ if (-not (Test-Path (Join-Path $backendDir 'mvnw.cmd'))) {
     exit 1
 }
 
-# 优先使用本机 JDK 17；找不到则沿用当前 JAVA_HOME 并给出提示
-$jdk17 = 'C:\Program Files\Java\jdk-17'
-if (Test-Path (Join-Path $jdk17 'bin\java.exe')) {
-    $env:JAVA_HOME = $jdk17
+# 优先使用本机 JDK 25；找不到则沿用当前 JAVA_HOME 并给出提示
+$jdk25 = Get-ChildItem 'C:\Program Files\Microsoft\jdk-25*', 'C:\Program Files\Java\jdk-25*' -Directory -ErrorAction SilentlyContinue |
+    Sort-Object Name -Descending | Select-Object -First 1
+if ($jdk25 -and (Test-Path (Join-Path $jdk25.FullName 'bin\java.exe'))) {
+    $env:JAVA_HOME = $jdk25.FullName
 } else {
-    Write-Host "[警告] 未找到 $jdk17，将沿用当前 JAVA_HOME：$env:JAVA_HOME" -ForegroundColor Yellow
-    Write-Host '        若构建失败，请手动把 JAVA_HOME 指向 JDK 17。' -ForegroundColor Yellow
+    Write-Host "[警告] 未找到 JDK 25，将沿用当前 JAVA_HOME：$env:JAVA_HOME" -ForegroundColor Yellow
+    Write-Host '        若构建失败，请安装 JDK 25 或手动把 JAVA_HOME 指向 JDK 25。' -ForegroundColor Yellow
 }
 
 # 链模式：未显式设置时按 stub（离线桩）运行
