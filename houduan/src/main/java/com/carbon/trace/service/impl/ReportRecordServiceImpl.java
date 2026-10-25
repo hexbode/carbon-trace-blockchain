@@ -18,6 +18,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 报告提交记录服务实现。
@@ -54,7 +55,10 @@ public class ReportRecordServiceImpl implements ReportRecordService {
                     .or().like(ReportRecord::getSourceName, keyword));
         }
         wrapper.orderByDesc(ReportRecord::getSubmittedAt);
-        return reportRecordMapper.selectList(wrapper);
+        List<ReportRecord> records = reportRecordMapper.selectList(wrapper);
+        // 报告记录只存排放量，活动数据/排放因子在排放记录中，统一联查补全供前端展示
+        enrich(records);
+        return records;
     }
 
     @Override
@@ -63,7 +67,37 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         if (record == null) {
             throw new ApiException(HttpStatus.NOT_FOUND, "报告记录不存在");
         }
+        enrich(List.of(record));
         return record;
+    }
+
+    /**
+     * 批量补全报告记录的活动数据与排放因子：
+     * 按 emissionId 一次性查询排放记录，避免逐条查询产生 N+1。
+     */
+    private void enrich(List<ReportRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        List<String> emissionIds = records.stream()
+                .map(ReportRecord::getEmissionId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .collect(Collectors.toList());
+        if (emissionIds.isEmpty()) {
+            return;
+        }
+        Map<String, EmissionRecord> emissionMap = emissionRecordMapper.selectBatchIds(emissionIds).stream()
+                .collect(Collectors.toMap(EmissionRecord::getId, e -> e, (a, b) -> a));
+        for (ReportRecord record : records) {
+            EmissionRecord emission = emissionMap.get(record.getEmissionId());
+            if (emission != null) {
+                record.setActivityData(emission.getActivityData());
+                record.setActivityUnit(emission.getActivityUnit());
+                record.setEmissionFactor(emission.getEmissionFactor());
+                record.setUnit(emission.getUnit());
+            }
+        }
     }
 
     /** 审核：结果非 certified/rejected 抛 400；同步更新关联排放记录状态，认证通过则触发认证上链 */

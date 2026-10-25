@@ -1,6 +1,7 @@
 package com.carbon.trace.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -61,4 +62,20 @@ public class ReportRecord {
 
     /** 审核意见 */
     private String auditOpinion;
+
+    /**
+     * 以下字段来自关联的排放记录（emission_records），仅用于接口展示，不落库。
+     * 报告记录本身只保存排放量，活动数据与排放因子需要通过 emissionId 联查补全。
+     */
+    @TableField(exist = false)
+    private BigDecimal activityData;
+
+    @TableField(exist = false)
+    private String activityUnit;
+
+    @TableField(exist = false)
+    private BigDecimal emissionFactor;
+
+    @TableField(exist = false)
+    private String unit;
 }

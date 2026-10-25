@@ -57,6 +57,20 @@ public class UserController {
         return userService.list(username, role);
     }
 
+    /** 当前登录用户的个人资料：任意登录角色均可查询本人记录（密码字段不回显），供个人中心使用 */
+    @GetMapping("/me")
+    public User me() {
+        LoginUser current = UserContext.get();
+        if (current == null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "未登录或登录已过期");
+        }
+        User user = userService.findByUsername(current.getUsername());
+        if (user == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "用户不存在");
+        }
+        return user;
+    }
+
     /** 新建用户，body 为 User 实体（含 username/password/role/name 等字段）；仅监管/管理员可执行 */
     @PostMapping
     public User create(@RequestBody User user) {
