@@ -2,6 +2,8 @@
   EmissionEntry.vue —— 碳排放数据填报页（企业端）
   用途：企业按排放源填报温室气体排放数据，系统按报告期与排放源自动匹配排放因子、
   计算核算排放量，提交后生成电子防伪码并进入认证流程，同时支持筛选与详情查看。
+  路由：/enterprise/emission（name: EmissionEntry，仅 enterprise 角色可访问）
+  依赖：排放记录/排放源接口、企业详情接口；提交时后端按排放源匹配因子并计算排放量、生成电子防伪码
 -->
 <template>
   <div class="page-container">
@@ -16,7 +18,8 @@
       </el-button>
     </div>
 
-    <!-- 筛选区：关键词搜索 + 按报告期、排放源、认证状态过滤记录 -->
+    <!-- 筛选区：关键词搜索 + 按报告期、排放源、认证状态过滤记录
+         筛选全部在前端本地完成（见 filteredRecords），不会重新请求接口 -->
     <div class="panel mb-16">
       <div class="panel-body">
         <el-form :inline="true" :model="filters">
@@ -49,7 +52,8 @@
       </div>
     </div>
 
-    <!-- 数据列表：展示排放记录编号、报告期、排放源、活动数据、因子、排放量、指纹与状态 -->
+    <!-- 数据列表：展示排放记录编号、报告期、排放源、活动数据、因子、排放量、指纹与状态
+         桌面端表格列宽以 min-width 按目标占比等比分配；手机端卡片字段与表格列一一对应 -->
     <div class="panel">
       <!-- 手机端用卡片列表，字段与下方表格列一一对应 -->
       <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
@@ -115,7 +119,8 @@
       </el-table>
     </div>
 
-    <!-- 新增表单弹窗 -->
+    <!-- 新增表单弹窗：报告年月、排放源、活动数据为输入项；排放因子与核算排放量为只读展示，
+         因子由排放源字典带出，排放量在前端按「活动数据 × 因子」试算，最终以后端核算为准 -->
     <el-dialog v-model="showForm" title="新增碳排放数据" width="640px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="100px">
         <el-form-item label="报告日期" prop="period">
@@ -156,7 +161,7 @@
       </template>
     </el-dialog>
 
-    <!-- 详情弹窗 -->
+    <!-- 详情弹窗：只读展示单条记录的核算结果、电子防伪码与认证状态 -->
     <el-dialog v-model="showDetail" title="排放数据详情" width="640px">
       <el-descriptions :column="2" border v-if="current">
         <el-descriptions-item label="记录编号">{{ current.id }}</el-descriptions-item>
@@ -201,12 +206,13 @@ const enterpriseId = userStore.user?.enterpriseId
 // 当前企业信息
 const enterprise = ref(null)
 
-// 生成 2024-01 ~ 2024-12 的报告期选项
+// 生成 2024-01 ~ 2024-12 的报告期选项（仅用于筛选下拉；填报弹窗的月份选择器可选任意年月）
 const periods = Array.from({ length: 12 }, (_, i) => `2024-${String(i + 1).padStart(2, '0')}`)
 // 排放源字典（用于筛选与填报下拉）
 const emissionSources = ref([])
 
 // ===== 筛选与列表 =====
+// 筛选条件：keyword 关键词、period 报告期、source 排放源编码、status 认证状态（均为空时不过滤）
 const filters = reactive({ keyword: '', period: '', source: '', status: '' })
 // 重置筛选条件
 const resetFilters = () => { filters.keyword = ''; filters.period = ''; filters.source = ''; filters.status = '' }
@@ -248,6 +254,7 @@ function statusTag(s) {
 // ===== 新增表单 =====
 const showForm = ref(false)
 const formRef = ref()
+// 表单字段：period 报告年月（YYYY-MM）、sourceCode 排放源编码、activityData 活动数据、remark 备注
 const form = reactive({ period: '', sourceCode: '', activityData: null, remark: '' })
 // 提交按钮加载态
 const submitting = ref(false)
@@ -258,9 +265,9 @@ const formRules = {
   activityData: [{ required: true, message: '请输入活动数据', trigger: 'blur' }]
 }
 
-// 当前选中的排放源（用于取单位与排放因子）
+// 当前选中的排放源（用于取单位与排放因子）；单位随排放源变化（如 t煤、万kWh）
 const currentSource = computed(() => emissionSources.value.find(s => s.code === form.sourceCode))
-// 核算排放量 = 活动数据 × 排放因子
+// 核算排放量 = 活动数据 × 排放因子；仅用于填报时的即时预览，最终数值以后端核算结果为准
 const calculatedAmount = computed(() =>
   (form.activityData || 0) * (currentSource.value?.factor || 0)
 )
@@ -277,7 +284,9 @@ async function loadRecords() {
   }
 }
 
-// 提交表单：校验通过后调用后端接口（后端自动计算排放量与电子防伪码）
+// 提交表单：先执行表单校验（报告期/排放源/活动数据必填），通过后调用新增接口
+// 请求只传报告期、排放源编码与活动数据，排放因子与排放量由后端按排放源核算；
+// 备注 remark 仅保留在表单内，未随当前请求载荷提交
 async function submitForm() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
@@ -320,6 +329,9 @@ useAutoRefresh(loadRecords)
 </script>
 
 <style scoped>
+/* ===== 桌面端与移动端共用的表单辅助样式 =====
+   本页无 scoped 移动端断点规则；手机端改为卡片列表由 isMobile 控制，
+   ≤767px 的通用排版（标签置顶、对话框宽度等）由 global.css / mobile.css 统一处理 */
 /* 表单字段下方的提示文字 */
 .form-tip {
   font-size: 12px;

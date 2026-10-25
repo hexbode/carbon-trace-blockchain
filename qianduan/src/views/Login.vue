@@ -2,6 +2,7 @@
   Login.vue —— 登录页
   用途：系统统一登录入口，用户选择角色（企业端/审核端/监管端/管理员）
   并输入账号密码完成登录，登录成功后根据角色跳转对应端首页。
+  路由：/login；登录成功后由 handleLogin 按角色跳转到对应端首页。
   左侧展示品牌与特性介绍，右侧为登录表单，并提供演示账号快捷填充。
 -->
 <template>
@@ -78,6 +79,7 @@
             <el-input v-model="form.password" type="password" placeholder="请输入密码" :prefix-icon="Lock" show-password @keyup.enter="handleLogin" />
           </el-form-item>
 
+          <!-- 记住登录状态选项 -->
           <el-form-item>
             <el-checkbox v-model="form.remember">记住登录状态</el-checkbox>
           </el-form-item>
@@ -128,7 +130,9 @@ const demoAccounts = [
   { username: 'admin', password: '123456', role: 'admin', name: '系统管理员' }
 ]
 
+// 路由实例：登录成功后按角色跳转
 const router = useRouter()
+// 用户状态仓库：保存 token 与用户信息快照
 const userStore = useUserStore()
 // 表单引用（用于校验）
 const formRef = ref()
@@ -249,6 +253,7 @@ async function handleLogin() {
   max-width: 420px;
 }
 
+/* 品牌图标：绿蓝渐变圆角方块 */
 .logo {
   width: 60px;
   height: 60px;
@@ -285,6 +290,7 @@ async function handleLogin() {
   gap: 16px;
 }
 
+/* 单条特性：图标 + 文案横向排列 */
 .feature-item {
   display: flex;
   align-items: center;
@@ -401,6 +407,7 @@ async function handleLogin() {
 
 /* ============ 移动端：碳护照式登录 ============ */
 /* 设计概念：深墨绿底 + 青柠信号色，像一张可核验的碳凭证 */
+/* 移动端断点 ≤767px（与 useDevice 的移动端判定一致） */
 @media (max-width: 767px) {
   .login-page {
     height: auto;

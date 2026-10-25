@@ -91,7 +91,17 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         this.complianceService = complianceService;
     }
 
-    /** 多条件过滤查询排放记录，按提交时间倒序 */
+    /**
+     * 多条件过滤查询排放记录，按提交时间倒序；参数为空表示该条件不限制。
+     * keyword 同时匹配编号、排放源名称、填报人。
+     *
+     * @param enterpriseId 企业编号，空则不筛选
+     * @param period       报告期（yyyy-MM），空则不筛选
+     * @param sourceCode   排放源编码，空则不筛选
+     * @param status       认证状态（pending / certified / rejected），空则不筛选
+     * @param keyword      关键字，空则不筛选
+     * @return 排放记录列表
+     */
     @Override
     public List<EmissionRecord> list(String enterpriseId, String period, String sourceCode, String status, String keyword) {
         LambdaQueryWrapper<EmissionRecord> wrapper = new LambdaQueryWrapper<>();
@@ -116,7 +126,13 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         return emissionRecordMapper.selectList(wrapper);
     }
 
-    /** 按编号查询详情，不存在抛 404 */
+    /**
+     * 按编号查询排放记录详情。
+     *
+     * @param id 排放记录编号（CR + 6 位序号）
+     * @return 排放记录
+     * @throws ApiException 404：排放记录不存在
+     */
     @Override
     public EmissionRecord getById(String id) {
         EmissionRecord record = emissionRecordMapper.selectById(id);
@@ -126,6 +142,19 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         return record;
     }
 
+    /**
+     * 新增排放填报（事务）。
+     * 处理链路：校验必填项与排放源 → 排放量 = 活动数据 × 因子（保留 2 位小数）→ 生成 12 位电子防伪码
+     * → 取一个链上未被占用的编号（三表同号）→ 插入排放记录 → 派生同号报告记录（pending）
+     * → 写入时合规判定生成告警 → 注册事务提交后的合规镜像上链。
+     * 链上副作用：事务提交后同步本期合计、年度合计与最近使用因子镜像（配额与因子规则依赖）；
+     * 失败按退避重试，最终失败生成 chain_failed 告警，本地数据仍保留。
+     *
+     * @param body 请求体，必填 enterpriseId、period、sourceCode、activityData；
+     *             enterpriseName 可空（缺失时按 enterpriseId 从企业表补全）
+     * @return 已落库的排放记录（编号、防伪码、排放量均已生成）
+     * @throws ApiException 400：必填项缺失或活动数据非法；404：排放源不存在
+     */
     @Override
     @Transactional
     public EmissionRecord create(Map<String, Object> body) {
@@ -215,6 +244,15 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         return record;
     }
 
+    /**
+     * 删除排放记录（事务），按「认证 → 报告 → 排放」顺序级联清理，避免引用残留导致外键失败。
+     * 链上不可删除：事务提交后把链上存证标记为作废（INVALID，历史留痕不可抹除），
+     * 并重算该企业该报告期的合计镜像，防止镜像残留偏高导致后续配额误判；
+     * 同时清理该企业该报告期的规则告警。
+     * 记录不存在时不抛 404，仍按编号执行关联清理与链上作废。
+     *
+     * @param id 排放记录编号（三表同号）
+     */
     @Override
     @Transactional
     public void delete(String id) {
@@ -226,6 +264,7 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
                 .eq(ReportRecord::getEmissionId, id));
         emissionRecordMapper.deleteById(id);
         // 链上不可删除：删除排放记录只能把链上存证标记为作废（作废状态保留在链上，历史留痕不可抹除）
+        // 记录可能已不存在，企业/报告期仅用于失败告警，故逐项判空；作废动作仍按编号执行
         String enterpriseId = record == null ? null : record.getEnterpriseId();
         String enterpriseName = record == null ? null : record.getEnterpriseName();
         String period = record == null ? null : record.getPeriod();
@@ -326,10 +365,25 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
         return index >= 0 ? factorUnit.substring(index + 1) : factorUnit;
     }
 
+    /**
+     * 请求体弱类型取值转字符串：value 为 null 时返回 null（保留「未提供」语义），
+     * 其余类型一律走 {@link String#valueOf(Object)}，不做数字/日期格式校验。
+     * 用于从 {@code Map<String, Object>} 请求体中取文本字段，是否合法由调用方的必填/业务校验决定。
+     *
+     * @param value 请求体中的原始值，可为 null
+     * @return 字符串值；入参为 null 时返回 null
+     */
     private String str(Object value) {
         return value == null ? null : String.valueOf(value);
     }
 
+    /**
+     * 请求体弱类型取值转 BigDecimal：null 或空白串返回 null（视为未填写），
+     * 内容不是合法数字时也不抛异常，同样返回 null，由调用方按「必填项缺失」统一报 400。
+     *
+     * @param value 请求体中的原始值（可能是 Number 或字符串），可为 null
+     * @return 解析后的十进制值；null、空白或非法数字均返回 null
+     */
     private BigDecimal toDecimal(Object value) {
         if (value == null || !StringUtils.hasText(String.valueOf(value))) {
             return null;

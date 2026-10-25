@@ -19,10 +19,26 @@ public class UserSettingsServiceImpl implements UserSettingsService {
 
     private final UserSettingsMapper userSettingsMapper;
 
+    /**
+     * 构造器注入依赖，由 Spring 容器创建，业务代码不应手工实例化。
+     *
+     * @param userSettingsMapper 用户设置 Mapper，以 userId 为主键读取与写入设置记录
+     */
     public UserSettingsServiceImpl(UserSettingsMapper userSettingsMapper) {
         this.userSettingsMapper = userSettingsMapper;
     }
 
+    /**
+     * 查询指定用户的账号设置，记录不存在时先插入一行默认值（四项开关全部开启）。
+     *
+     * 读取带写副作用：首次访问即补齐记录，保证前端始终拿到完整结构；
+     * user_settings 以 userId 为主键，故直接按主键查询。
+     *
+     * 权限：控制器限制本人或 regulator / admin。
+     *
+     * @param userId 用户主键（即 user_settings 主键）
+     * @return 含 userId 与 msgNotify/smsNotify/loginRemind/weeklyReport 的 Map
+     */
     @Override
     public Map<String, Object> getSettings(Integer userId) {
         UserSettings settings = userSettingsMapper.selectById(userId);
@@ -40,6 +56,20 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         return toResult(settings);
     }
 
+    /**
+     * 更新指定用户的账号设置，记录不存在时先插入默认行再按请求覆盖。
+     *
+     * 只有四个开关字段生效，请求体中的其他键被忽略；
+     * 每个值交 boolVal 解析：布尔值直接采用，其他非空值按 Boolean.parseBoolean 转换，
+     * 字段缺失时沿用原值，避免前端只提交部分开关时把其余开关误置为关闭。
+     * 本次更新时间统一刷新为当前时间。
+     *
+     * 权限：控制器限制本人或 regulator / admin。
+     *
+     * @param userId 用户主键
+     * @param body   请求体，键为 msgNotify/smsNotify/loginRemind/weeklyReport
+     * @return 更新后的完整设置
+     */
     @Override
     public Map<String, Object> updateSettings(Integer userId, Map<String, Object> body) {
         UserSettings settings = userSettingsMapper.selectById(userId);

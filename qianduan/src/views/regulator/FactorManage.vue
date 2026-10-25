@@ -4,6 +4,11 @@
   功能描述：维护碳排放核算因子库（排放源、类别、排放因子值、
            单位、参考标准等），统一各企业的核算口径，确保排放数据可比性。
            支持按排放源与类别筛选、新增/编辑因子、启用/停用因子状态。
+  路由：/regulator/factor（name: FactorManage，roles: regulator / admin）
+  依赖接口：@/api/factor 的 getEmissionFactors、createEmissionFactor、
+           updateEmissionFactor（编辑与启用/停用共用同一更新接口）
+  说明：类别下拉由已加载因子的 category 去重生成，因此新增时只能选择库中已有类别；
+       列表一次全量加载，筛选在前端完成，无分页；单位限定为四种标准口径，见 UNIT_OPTIONS。
 -->
 <template>
   <div class="page-container">
@@ -17,6 +22,7 @@
     </div>
 
     <!-- 筛选区：按排放源名称、类别筛选因子列表 -->
+    <!-- 两个条件在前端叠加过滤（见 filtered）；类别选项来自现有因子数据，不能在此新增类别 -->
     <div class="panel mb-16">
       <div class="panel-body" style="padding: 16px 20px 0">
         <el-form :inline="true" :model="filters">
@@ -58,6 +64,7 @@
           </div>
         </div>
 
+        <!-- 桌面端表格（>767px）：排放因子列把数值与单位拼在同一单元格，便于对照阅读 -->
         <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="source" label="排放源名称" min-width="120" align="center" />
           <el-table-column prop="category" label="类别" min-width="150" align="center" />
@@ -80,6 +87,8 @@
     </div>
 
     <!-- 新增/编辑因子对话框：根据 form.id 是否存在切换标题 -->
+    <!-- 排放因子使用 el-input-number：保留 4 位小数、步长 0.0001、不允许负数；
+         单位下拉由 unitOptions 提供（预设四项 + 当前历史值兼容），避免手工输入造成口径不一致 -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑排放因子' : '新增排放因子'" width="520px">
       <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
         <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
@@ -101,6 +110,7 @@
         </el-form>
       </div>
       <template #footer>
+        <!-- 保存：先做必填校验，通过后按 form.id 分派新增或更新 -->
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submit" :loading="submitting">保存</el-button>
       </template>
@@ -123,15 +133,16 @@ import { useDevice } from '@/composables/useDevice'
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 因子列表
+// 因子列表（接口一次返回全量，前端筛选，无分页）
 const factors = ref([])
 // 列表加载态
 const loading = ref(false)
-// 因子类别列表：从已加载数据去重得到
+// 因子类别列表：从已加载数据去重得到，作为筛选栏与新增/编辑表单的类别选项
+// 因此新类别只能随已有因子进入库中，页面不提供类别字典维护
 const categories = computed(() => [...new Set(factors.value.map(f => f.category))])
 // 筛选条件响应式状态：排放源名称关键字 + 类别
 const filters = reactive({ source: '', category: '' })
-// 经筛选后的因子列表计算属性
+// 经筛选后的因子列表计算属性：排放源为包含匹配，类别为精确匹配，两者叠加生效
 const filtered = computed(() => factors.value.filter(f =>
   (!filters.source || f.source.includes(filters.source)) &&
   (!filters.category || f.category === filters.category)
@@ -144,16 +155,20 @@ const formRef = ref()
 // 提交按钮加载态
 const submitting = ref(false)
 // 表单响应式状态：id 为空表示新增
+// 类别只能从 categories 选择；编辑时 Object.assign 会一并带回 status 等非表单字段，提交 {...form} 回传
 const form = reactive({ id: null, source: '', category: '', factor: 0, unit: '', standard: '' })
 // 排放因子单位预设值：与因子库现有口径保持一致，避免手工输入产生不一致的单位
+// tCO₂/t 每吨物料、tCO₂/GJ 每吉焦热量、tCO₂/MWh 每兆瓦时电量、tCO₂/万m³ 每万立方米燃气
 const UNIT_OPTIONS = ['tCO₂/t', 'tCO₂/GJ', 'tCO₂/MWh', 'tCO₂/万m³']
 // 单位下拉选项：编辑历史数据时若单位不在预设列表中，临时补充显示，避免下拉框显示为空
+// 仅影响下拉候选与展示，不会改写原记录的单位值；提交仍使用 form.unit
 const unitOptions = computed(() => {
   const list = [...UNIT_OPTIONS]
   if (form.unit && !list.includes(form.unit)) list.push(form.unit)
   return list
 })
 // 表单校验规则：必填字段
+// 参考标准 standard 非必填；factor 使用 el-input-number，0 也是有效输入
 const rules = {
   source: [{ required: true, message: '请输入排放源名称', trigger: 'blur' }],
   category: [{ required: true, message: '请选择类别', trigger: 'change' }],
@@ -161,7 +176,7 @@ const rules = {
   unit: [{ required: true, message: '请选择单位', trigger: 'change' }]
 }
 
-// 拉取因子列表
+// 拉取因子列表（全量，前端筛选）
 async function load() {
   loading.value = true
   try {
@@ -197,6 +212,7 @@ async function submit() {
   }
 }
 // 切换因子启用/停用状态（调用更新接口后刷新列表）
+// status 映射：active → inactive（停用），其余 → active（启用）
 async function toggle(row) {
   const status = row.status === 'active' ? 'inactive' : 'active'
   await updateEmissionFactor(row.id, { ...row, status })

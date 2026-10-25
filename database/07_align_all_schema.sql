@@ -1,21 +1,38 @@
 -- ============================================================
--- 结构对齐（完整版）：把实库中「本应允许为空、却被建成 NOT NULL」的列改回可空
+-- 07_align_all_schema.sql —— 结构对齐（完整版，其余各表）
 --
--- 背景：database/carbon_emission_db.sql 是表结构的基准定义，其中大量可选字段是
---       DEFAULT NULL；但实际数据库里这些列被统一建成了 NOT NULL 且无默认值，
---       导致后端插入时报「Field 'xxx' doesn't have a default value」：
---         · 新增企业        （缺 address / scope / registered_at）
---         · 新增审核机构    （缺 created_at）
---         · 新增用户        （缺 created_at，已在 06 修复）
---         · 新增排放记录    （缺 created_at / type_label 等）
---       此外 users.name 被建成了 VARCHAR(8)，比基准文件（VARCHAR(50)）窄，
---       前端姓名输入框上限是 20 字，超过 8 字会报 Data too long，此处一并对齐。
+-- 【用途】
+--   把实库中「本应允许为空、却被建成 NOT NULL」的列改回可空，并修正 users.name 长度。
 --
--- 说明：仅放宽约束 / 放宽长度，不修改数据，不影响索引、外键与字符集。
--- 关系：06_align_schema.sql 处理了 report_records 与 certification_records，
---       本文件处理其余各表，两个文件都要执行。
+-- 【背景】
+--   database/carbon_emission_db.sql 是表结构的基准定义，其中大量可选字段是
+--   DEFAULT NULL；但实际数据库里这些列被统一建成了 NOT NULL 且无默认值，
+--   导致后端插入时报「Field 'xxx' doesn't have a default value」：
+--     · 新增企业        （缺 address / scope / registered_at）
+--     · 新增审核机构    （缺 created_at）
+--     · 新增用户        （缺 created_at，已在 06 修复）
+--     · 新增排放记录    （缺 created_at / type_label 等）
+--   此外 users.name 被建成了 VARCHAR(8)，比基准文件（VARCHAR(50)）窄，
+--   前端姓名输入框上限是 20 字，超过 8 字会报 Data too long，此处一并对齐。
 --
--- 用法：mysql -uroot -p -D carbon_emission < 07_align_all_schema.sql
+-- 【执行顺序】
+--   第 6 位，晚于 carbon_emission_db.sql、03、04：
+--     · 第 9 节修改 regulator_organizations，该表由 04 创建，必须先执行 04；
+--     · users 的 email/signature 由 03 追加，本文件不涉及这两列。
+--   与 06_align_schema.sql 互补：06 处理 report_records / certification_records，
+--   本文件处理其余各表，两个文件都要执行。
+--
+-- 【依赖】
+--   库 carbon_emission 已存在（用 -D carbon_emission 指定库）。
+--
+-- 【幂等性】
+--   可重复执行：MODIFY COLUMN 重复执行结果一致；仅放宽约束 / 放宽长度，
+--   不修改数据，不影响索引、外键与字符集。
+--
+-- 【已下线链表提示】
+--   第 6、7 节针对 `blocks` / `block_transactions`，这两张表属早期模拟链表，
+--   实际库（11 张表）中不存在。若按实库执行，这两节会报 ERROR 1146，
+--   需先按实库结构删去对应小节，或先恢复链表建表。
 -- ============================================================
 
 -- 1. 企业信息表
@@ -53,11 +70,13 @@ ALTER TABLE `emission_records`
   MODIFY COLUMN `reporter`      VARCHAR(50) DEFAULT NULL COMMENT '填报人';
 
 -- 6. 区块表
+-- 【已下线链表】实库无 blocks 表时本小节会报 1146，执行前按需删去。
 ALTER TABLE `blocks`
   MODIFY COLUMN `merkle_root` VARCHAR(70) DEFAULT NULL COMMENT '默克尔根',
   MODIFY COLUMN `miner`       VARCHAR(50) DEFAULT NULL COMMENT '打包节点';
 
 -- 7. 区块交易表
+-- 【已下线链表】实库无 block_transactions 表时本小节会报 1146，执行前按需删去。
 ALTER TABLE `block_transactions`
   MODIFY COLUMN `emission_id`     VARCHAR(20)   DEFAULT NULL COMMENT '关联排放记录编号',
   MODIFY COLUMN `enterprise_name` VARCHAR(100)  DEFAULT NULL COMMENT '企业名称',

@@ -1,6 +1,7 @@
 <!--
   CertQuery.vue —— 电子防伪码查询页（公共查询端，无需登录）
   用途：社会公众输入认证证书上的电子防伪码，查询该企业碳排放数据的认证信息与链上存证详情。
+  路由：/public/query（PublicLayout 子路由）；支持扫码链接携带 ?fp= 参数自动查询。
   安全说明：认证编号为连续编号、可被遍历枚举，因此公共端不提供按认证编号查询的能力，
             仅允许使用电子防伪码（12 位随机串）查询。
 -->
@@ -18,6 +19,7 @@
         <template #prefix><el-icon><Search /></el-icon></template>
         <template #append><el-button type="primary" @click="doSearch">查询</el-button></template>
       </el-input>
+      <!-- 示例防伪码：点击即填充输入框并发起查询，方便演示与试用 -->
       <div class="quick">
         <span class="qs-label">示例防伪码：</span>
         <el-tag
@@ -64,6 +66,7 @@
           </div>
         </div>
       </div>
+      <!-- 桌面端：两列描述列表，完整展示认证字段与链上存证 -->
       <el-descriptions v-else :column="2" border>
         <el-descriptions-item label="报告日期">{{ formatPeriod(result.period) }}</el-descriptions-item>
         <el-descriptions-item label="认证排放量"><span class="text-primary" style="font-weight:700">{{ result.amount }} tCO₂</span></el-descriptions-item>
@@ -112,6 +115,7 @@ const samples = ref([])
 async function doSearch() {
   const q = query.value.trim()
   if (!q) return
+  // 先标记已查询，再发请求：无结果时据此显示空状态而不是初始页面
   searched.value = true
   try {
     result.value = await getCertificationByFingerprint(q)
@@ -208,6 +212,7 @@ function fallbackCopy(text) {
 .result-header.is-mobile .result-title { flex: 1; min-width: 0; }
 .result-header.is-mobile :deep(.el-tag) { margin-left: 0; }
 
+/* 移动端断点 ≤767px：收紧布局，长文本改为上下排列 */
 @media (max-width: 767px) {
   /* 标题与面板内边距收紧，避免超宽标题与冗余留白 */
   .hero { margin-bottom: 18px; }

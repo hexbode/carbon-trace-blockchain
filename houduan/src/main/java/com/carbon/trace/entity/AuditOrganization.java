@@ -11,13 +11,14 @@ import java.time.LocalDate;
  * 审核机构表。
  * 对应表 audit_organizations，主键 id 为业务分配的机构编号（IdType.INPUT）。
  * 业务职责：登记具有碳排放认证资质的第三方审核机构；审核员账号（user.orgId）挂靠在本表机构下，对企业的排放记录出具认证。
+ * 关联关系：users.org_id 引用本表 id（auditor 角色）；机构本身不直接关联排放记录，认证记录通过审核人体现归属。
  * 字段契约：{@code qualification} 为资质证书号，{@code scope} 为可承接的业务范围，配合 {@code status} 控制机构是否可入驻/承接审核。
  */
 @Data
 @TableName("audit_organizations")
 public class AuditOrganization {
 
-    /** 机构编号；应用内生成的唯一标识，审核员账号通过 orgId 引用。 */
+    /** 机构编号；应用内生成的唯一标识（格式 AUD + 3 位序号），审核员账号通过 orgId 引用。 */
     @TableId(type = IdType.INPUT)
     private String id;
 
@@ -27,7 +28,7 @@ public class AuditOrganization {
     /** 机构简称 */
     private String shortName;
 
-    /** 机构代码 */
+    /** 机构代码；机构自身的业务编码，与主键 id 不同。 */
     private String code;
 
     /** 联系人 */
@@ -42,9 +43,9 @@ public class AuditOrganization {
     /** 业务范围 */
     private String scope;
 
-    /** 状态 */
+    /** 状态：active 启用 / inactive 停用；停用后不再承接新的审核（历史记录保留）。 */
     private String status;
 
-    /** 入驻时间 */
+    /** 入驻时间；新增时未指定则默认当日。 */
     private LocalDate createdAt;
 }

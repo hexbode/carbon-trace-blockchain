@@ -1,6 +1,9 @@
 <!--
   CertificateView.vue - 认证证书查看页（企业端）
   用途：展示已通过区块链认证的碳排放报告电子证书，支持证书卡片浏览、详情查看与链上存证信息验证
+  路由：/enterprise/certificate（name: CertificateView，仅 enterprise 角色可访问）
+  依赖：认证记录与链上合规快照接口；jsPDF 生成 PDF，qrcode 生成核验二维码
+  说明：弹窗内证书用 SVG 绘制印章预览，下载 PDF 时由 Canvas 重绘同款印章
 -->
 <template>
   <div class="page-container">
@@ -10,14 +13,16 @@
       <p>已通过区块链认证的碳排放报告，可查看电子证书并验证链上存证</p>
     </div>
 
-    <!-- 汇总统计卡片区：证书总数、累计认证排放量、最新认证日期 -->
+    <!-- 汇总统计卡片区：证书总数、累计认证排放量、最新认证日期
+         仅统计有效（valid）证书；累计排放量为各证书 amount 求和，最新认证取列表首项（顺序由后端决定） -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="8"><div class="stat-card"><div class="label">证书总数</div><div class="value">{{ certs.length }}<span class="unit">张</span></div></div></el-col>
       <el-col :span="8"><div class="stat-card"><div class="label">累计认证排放量</div><div class="value">{{ totalAmount.toFixed(0) }}<span class="unit">tCO₂</span></div></div></el-col>
       <el-col :span="8"><div class="stat-card"><div class="label">最新认证</div><div class="value">{{ latest?.certifiedAt?.slice(0, 10) || '-' }}</div></div></el-col>
     </el-row>
 
-    <!-- 证书卡片列表：点击打开证书详情弹窗；手机端用卡片列表，桌面端用卡片网格 -->
+    <!-- 证书卡片列表：点击打开证书详情弹窗；手机端用卡片列表，桌面端用卡片网格
+         卡片仅展示证书摘要，完整证书正文、链上存证与合规判定在弹窗内呈现 -->
     <div v-if="isMobile" v-loading="loading" class="m-list">
       <el-empty v-if="!certs.length" description="暂无数据" :image-size="70" />
       <div v-for="cert in certs" :key="cert.id" class="m-card">
@@ -54,7 +59,7 @@
       <el-empty v-if="!certs.length" description="暂无认证证书" style="grid-column: 1/-1" />
     </div>
 
-    <!-- 证书详情对话框：展示电子证书正文与区块链存证信息 -->
+    <!-- 证书详情对话框：展示电子证书正文、区块链存证信息、链上合规判定快照、核验二维码与认证专用章 -->
     <el-dialog v-model="showCert" title="碳排放认证证书" width="600px">
       <div class="certificate" :class="{ 'is-mobile': isMobile }" v-if="current">
         <div class="cert-top">
@@ -83,7 +88,8 @@
           </el-descriptions>
         </div>
         <div class="cert-bottom">
-          <!-- 证书核验二维码：手机扫码进入公共查询端核验本证书 -->
+          <!-- 证书核验二维码：手机扫码进入公共查询端核验本证书
+               内容为带电子防伪码的 HTTPS 核验链接，生成规则见 buildQrPayload() -->
           <div class="cert-qr">
             <img v-if="qrDataUrl" :src="qrDataUrl" class="cert-qr-img" alt="证书核验二维码" />
             <div class="cert-qr-text">
@@ -95,7 +101,9 @@
             <el-icon color="#10b981"><CircleCheck /></el-icon>
             <span>本证书数据已上链存证，哈希值可在区块链浏览器验证，不可篡改</span>
           </div>
-          <!-- 认证专用章：与 PDF 中的印章保持同一设计语言 -->
+          <!-- 认证专用章：与 PDF 中的印章保持同一设计语言
+               此处为 SVG 预览版，下载 PDF 时由 drawSeal() 用 Canvas 重绘同款印章
+               （双环、弧形单位名、五角星、日期，整体 -8° 倾斜模拟盖印） -->
           <div class="cert-seal-wrap">
             <svg class="cert-seal-svg" viewBox="0 0 170 170" role="img" aria-label="碳排放认证专用章">
               <defs>
@@ -157,13 +165,13 @@ import { useDevice } from '@/composables/useDevice'
 const userStore = useUserStore()
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
-// 当前企业的有效认证证书列表
+// 当前企业的有效认证证书列表（接口按 status=valid 过滤，已撤销的证书不在本页展示）
 const certs = ref([])
 // 列表加载态
 const loading = ref(false)
 // 累计认证排放量
 const totalAmount = computed(() => certs.value.reduce((s, c) => s + Number(c.amount || 0), 0))
-// 最新一张证书（取列表首项）
+// 最新一张证书（取列表首项，前提是后端按认证时间倒序返回）
 const latest = computed(() => certs.value[0] || null)
 
 // 证书详情弹窗显隐控制与当前选中证书
@@ -174,18 +182,25 @@ const qrDataUrl = ref('')
 // PDF 生成中的按钮状态
 const downloading = ref(false)
 
-// 核验页面基地址：HTTP 访问时统一指向 HTTPS(8443)，扫码后进入安全上下文
+// 核验页面基地址
+// 为什么 HTTP 下要指向 HTTPS 8443：
+//   网页摄像头/扫码能力只在安全上下文（HTTPS 或 localhost）中可用。若企业端以 HTTP 访问，
+//   二维码里若写同源 HTTP 地址，手机打开后公共查询端无法调用摄像头，因此统一改写到同主机的
+//   HTTPS 端口 8443（部署时该端口映射到 nginx 的 SSL 监听，见 README 的端口映射说明），
+//   自签证书可让手机安装信任后正常访问；HTTPS 访问时直接沿用当前 origin，无需改写端口。
 function verificationBase() {
   if (window.location.protocol === 'https:') return window.location.origin
   return `https://${window.location.hostname}:8443`
 }
 
-// 二维码内容：公共查询端核验链接，手机扫码后自动带出防伪码并查询
+// 二维码内容：公共查询端核验链接（hash 路由 /#/public/query，fp 为编码后的电子防伪码），
+// 手机扫码后公共端自动带出防伪码并查询
 function buildQrPayload(fingerprint) {
   return `${verificationBase()}/#/public/query?fp=${encodeURIComponent(fingerprint)}`
 }
 
-// 生成证书核验二维码
+// 生成证书核验二维码（弹窗展示用）：容错等级 M、静区 1 模块、深绿近黑前景保证打印/屏幕识别率；
+// 生成失败时清空二维码，不阻断证书正文展示
 async function prepareQr(fingerprint) {
   if (!fingerprint) {
     qrDataUrl.value = ''
@@ -203,7 +218,7 @@ async function prepareQr(fingerprint) {
   }
 }
 
-// 加载图片（用于把二维码绘制到 PDF 画布）
+// 加载图片（用于把二维码绘制到 PDF 画布；Canvas 只能绘制已加载完成的 Image 对象）
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -212,9 +227,11 @@ function loadImage(src) {
     img.src = src
   })
 }
-// 当前证书的链上合规判定快照
+// 当前证书的链上合规判定快照：{certId, flags, compliant, items[]}，由链上合约在认证上链时写入；
+// 查询失败或链层不可用时为 null，界面显示「—」；链上查不到该编号时按 flags=0（视为合规）返回
 const compliance = ref(null)
-// 打开证书详情弹窗：记录当前证书并读取其链上合规判定
+// 打开证书详情弹窗：先展示证书与清空上一条的合规/二维码，再并行异步补全
+// 二维码生成与合规查询都不阻塞弹窗打开
 async function viewCert(cert) {
   current.value = cert
   showCert.value = true
@@ -228,7 +245,7 @@ async function viewCert(cert) {
     compliance.value = null
   }
 }
-// 文本超宽时截断并加省略号（用于 canvas 绘制时防止溢出）
+// 文本超宽时逐字符截断并补省略号（Canvas 无自动换行，用于防止哈希等长文本越界）
 function clipText(ctx, text, maxWidth) {
   if (ctx.measureText(text).width <= maxWidth) return text
   let s = text
@@ -236,7 +253,8 @@ function clipText(ctx, text, maxWidth) {
   return s + '…'
 }
 
-// 下载证书：先生成核验二维码，再绘制证书画布并打包成 PDF 下载
+// 下载证书：先生成核验二维码并加载为图片（失败则不画二维码，PDF 仍可生成），
+// 再按 3 倍尺寸绘制证书画布，最后按 A4 横向等比缩放放入 PDF 并触发保存
 async function download() {
   const c = current.value
   if (!c || downloading.value) return
@@ -277,7 +295,8 @@ async function download() {
   }
 }
 
-// 绘制证书画布：底色、边框、标题、明细、二维码、印章与底部说明
+// 绘制证书画布：逻辑尺寸 1000×700，按 scale=3 放大绘制后再由 jsPDF 缩放，保证打印清晰
+// 版面分区：标题区 → 正文说明与大号排放量 → 左半区明细行 → 右侧核验二维码 → 右下角印章 → 底部链上存证说明
 function drawCertificate(c, qrImage) {
   const W = 1000
   const H = 700
@@ -372,7 +391,8 @@ function drawCertificate(c, qrImage) {
   return { canvas, W, H }
 }
 
-// 沿圆弧逐字绘制文字：形成印章的环形文字效果
+// 沿圆弧逐字绘制文字：按字符数均分起止角度，逐字平移到圆周位置并旋转 (角度 + 90°)，
+// 使字头朝外、字底朝向圆心，形成印章的环形文字效果
 function drawArcText(ctx, text, cx, cy, radius, startAngle, endAngle, font) {
   const chars = [...text]
   ctx.save()
@@ -391,7 +411,7 @@ function drawArcText(ctx, text, cx, cy, radius, startAngle, endAngle, font) {
   ctx.restore()
 }
 
-// 绘制五角星（印章中央标识）
+// 绘制五角星（印章中央标识）：10 个顶点交替取外/内半径，从正上方起每 36° 取一点并闭合填充
 function drawStar(ctx, cx, cy, radius) {
   ctx.beginPath()
   for (let i = 0; i < 10; i++) {
@@ -406,7 +426,9 @@ function drawStar(ctx, cx, cy, radius) {
   ctx.fill()
 }
 
-// 绘制碳排放认证专用章：双环 + 弧形文字 + 五角星 + 日期，略倾斜模拟盖印
+// 绘制碳排放认证专用章：Canvas 版印章，与弹窗中 SVG 印章视觉一致
+// 构成：外圈叠印（低透明度模拟墨迹不匀）+ 双圆环 + 顶部弧形单位名 + 五角星 + “认证专用章” + 认证日期；
+// 整体 -8° 倾斜、印章红半透明填充，贴近纸质证书的盖印效果
 function drawSeal(ctx, cx, cy, certifiedAt) {
   const color = 'rgba(178, 58, 51, 0.92)'
   ctx.save()
@@ -452,7 +474,7 @@ function drawSeal(ctx, cx, cy, certifiedAt) {
   ctx.restore()
 }
 
-// 拉取当前企业有效认证证书
+// 拉取当前企业有效认证证书（只取 status=valid，与页面统计口径一致）
 async function load() {
   loading.value = true
   try {
@@ -467,6 +489,7 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式 ===== */
 /* 证书卡片网格布局：自适应列数 */
 .cert-grid {
   display: grid;
@@ -560,6 +583,7 @@ useAutoRefresh(load)
 }
 .chain-proof { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #059669; }
 
+/* ===== 移动端（≤767px）适配：由 isMobile 添加 is-mobile 类 ===== */
 /* 手机端证书正文：压缩字号与留白，长哈希/长文本自动换行，避免横向溢出 */
 .certificate.is-mobile {
   padding: 0;

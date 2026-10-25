@@ -1,6 +1,8 @@
 <!--
   EnterpriseHome.vue - 企业端首页
   用途：企业登录后首页概览，展示欢迎横幅、关键指标卡片、月度排放趋势图、排放源占比图及最近报告提交列表
+  路由：/enterprise/home（name: EnterpriseHome，仅 enterprise 角色可访问）
+  依赖：企业详情、企业概览/趋势/排放源占比统计接口与报告记录接口；图表由 ECharts 渲染
 -->
 <template>
   <div class="page-container">
@@ -15,7 +17,8 @@
       </div>
     </div>
 
-    <!-- 关键指标卡片区：累计碳排放、已认证/待审核报告数、认证证书数及环比趋势 -->
+    <!-- 关键指标卡片区：累计碳排放、已认证/待审核报告数、认证证书数及环比趋势
+         数值来自企业概览接口；趋势为演示用静态环比值（正数表示较上期下降、负数表示上升） -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="6" v-for="stat in stats" :key="stat.label">
         <div class="stat-card clickable" @click="$router.push(stat.link)">
@@ -28,7 +31,8 @@
       </el-col>
     </el-row>
 
-    <!-- 图表区：左侧月度排放趋势折线图，右侧排放源占比饼图 -->
+    <!-- 图表区：左侧月度排放趋势折线图，右侧排放源占比饼图
+         趋势图横轴取接口返回的月份轴（YYYY-MM），饼图数值按排放源聚合后取整 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="16">
         <div class="panel">
@@ -121,9 +125,12 @@ const userStore = useUserStore()
 const enterprise = ref({ name: '企业' })
 // 当前企业的报告记录
 const myRecords = ref([])
-// 企业排放概览统计
+// 企业排放概览统计（统计口径：totalEmission 为企业全部排放记录排放量合计；
+// certifiedCount / pendingCount 为排放记录的状态计数；certCount 仅统计有效（valid）认证，
+// 认证记录在审核通过时生成，撤销后会减少，因此 certCount 与 certifiedCount 可能不相等）
 const overview = ref({ totalEmission: 0, certifiedCount: 0, pendingCount: 0, certCount: 0 })
-// 月度趋势：月份标签与对应数值
+// 月度趋势：月份标签（YYYY-MM）与对应月度排放合计
+// 月份轴由后端按该企业真实报告期生成（无记录时回退最近 12 个月），data 与 months 等长且缺月补 0
 const months = ref([])
 const trendData = ref([])
 // 排放源占比数据
@@ -137,6 +144,7 @@ const certifiedCount = computed(() => overview.value.certifiedCount || 0)
 const pendingCount = computed(() => overview.value.pendingCount || 0)
 
 // 首页指标卡片数据：含标签、数值、单位、图标、环比趋势与点击跳转地址
+// trend 为演示用静态值（本项目未提供环比接口）；正数渲染为绿色 ↓，负数渲染为红色 ↑
 const stats = computed(() => [
   { label: '累计碳排放', value: totalEmission.value.toFixed(1), unit: 'tCO₂', icon: 'DataAnalysis', trend: -3.2, link: '/enterprise/trend' },
   { label: '已认证报告', value: certifiedCount.value, unit: '份', icon: 'Stamp', trend: 8.5, link: '/enterprise/records?status=certified' },
@@ -144,7 +152,7 @@ const stats = computed(() => [
   { label: '认证证书', value: overview.value.certCount || 0, unit: '张', icon: 'Certificate', trend: 5.1, link: '/enterprise/certificate' }
 ])
 
-// 最近 6 条报告记录
+// 最近 6 条报告记录（列表顺序沿用接口返回顺序，首页仅做数量截取）
 const recentRecords = computed(() => myRecords.value.slice(0, 6))
 
 // 月度排放趋势折线图配置（平滑曲线 + 区域填充）
@@ -178,7 +186,7 @@ const pieOption = () => ({
 // 初始化占比图，pieChartRef 绑定到模板容器
 const { chartRef: pieChartRef } = useECharts(pieOption)
 
-// 拉取首页数据
+// 拉取首页数据：五个接口并发请求，任一失败会影响整组结果，故各字段均做空值兜底
 async function load() {
   const enterpriseId = userStore.user?.enterpriseId
   const [detail, ov, trend, share, reports] = await Promise.all([
@@ -206,6 +214,7 @@ function tagType(s) { return { certified: 'success', pending: 'warning', rejecte
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式 ===== */
 /* 欢迎横幅：渐变背景 + 装饰圆形 */
 .welcome-banner {
   background: linear-gradient(135deg, #10b981, #0d9488);
@@ -234,6 +243,7 @@ function tagType(s) { return { certified: 'success', pending: 'warning', rejecte
 .banner-text h2 { margin: 0 0 6px; font-size: 24px; }
 .banner-text p { margin: 0; opacity: .9; font-size: 14px; }
 .banner-icon { position: relative; z-index: 1; opacity: .85; }
+/* ===== 移动端（≤767px）适配：由 isMobile 添加 is-mobile 类，其余通用适配见 mobile.css ===== */
 /* 手机端横幅：压缩内边距并降低标题字号，避免占用过多首屏高度 */
 .welcome-banner.is-mobile {
   padding: 16px 18px;

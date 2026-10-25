@@ -49,12 +49,28 @@ public class UserServiceImpl implements UserService {
     private final UserSettingsMapper userSettingsMapper;
     private final JwtUtil jwtUtil;
 
+    /**
+     * 构造器注入依赖，由 Spring 容器创建，业务代码不应手工实例化。
+     *
+     * @param userMapper         用户 Mapper，负责账号查询、密码更新与状态维护
+     * @param userSettingsMapper 用户设置 Mapper，新增用户时同步初始化其默认设置
+     * @param jwtUtil            JWT 工具，登录成功时签发、校验令牌
+     */
     public UserServiceImpl(UserMapper userMapper, UserSettingsMapper userSettingsMapper, JwtUtil jwtUtil) {
         this.userMapper = userMapper;
         this.userSettingsMapper = userSettingsMapper;
         this.jwtUtil = jwtUtil;
     }
 
+    /**
+     * 按账号、角色条件查询用户列表（账号模糊、角色精确，均按主键升序）。
+     *
+     * 权限：服务层不做鉴权，控制器仅允许 regulator / admin 调用本查询。
+     *
+     * @param username 账号关键字；空白时不参与过滤
+     * @param role     角色编码；空白时不参与过滤
+     * @return 用户列表；密码字段因 WRITE_ONLY 不会序列化到响应
+     */
     @Override
     public List<User> list(String username, String role) {
         LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper<>();
@@ -68,6 +84,13 @@ public class UserServiceImpl implements UserService {
         return userMapper.selectList(wrapper);
     }
 
+    /**
+     * 按主键查询用户，作为其余写操作的统一存在性校验入口。
+     *
+     * @param id 用户主键
+     * @return 用户实体
+     * @throws ApiException 用户不存在时抛 404（NOT_FOUND）
+     */
     @Override
     public User getById(Integer id) {
         User user = userMapper.selectById(id);
@@ -77,8 +100,21 @@ public class UserServiceImpl implements UserService {
         return user;
     }
 
+    /**
+     * 新增用户：补齐密码、状态与注册日期后落库。
+     *
+     * 未提交密码时写入统一初始密码 {@value #DEFAULT_PASSWORD} 的 BCrypt 哈希；
+     * 状态为空默认 active；createdAt 为 NOT NULL 且无默认值，由后端补当日。
+     * 账号唯一性由数据库唯一键（uk_user_username）保证，本方法不预检，重复时插入异常上抛。
+     *
+     * 权限：控制器仅允许 regulator / admin 调用。
+     *
+     * @param user 用户实体（username、role 必填）
+     * @return 落库后的用户实体，id 为数据库自增主键
+     */
     @Override
     public User create(User user) {
+        // 密码统一以 BCrypt（含 {bcrypt} 前缀）入库，历史明文由启动迁移处理
         if (!StringUtils.hasText(user.getPassword())) {
             user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
         } else {
@@ -95,17 +131,35 @@ public class UserServiceImpl implements UserService {
         return user;
     }
 
+    /**
+     * 按主键更新用户资料，采用字段白名单防止提权与凭据篡改。
+     *
+     * 白名单规则：
+     *  - 所有调用者可改展示类字段（name/phone/email/signature/avatar），
+     *    但提交空值会被 MyBatis-Plus 默认的 NOT_NULL 更新策略忽略，原值保留；
+     *  - 仅 regulator / admin（由 UserContext 判定）可改 role/status/enterpriseId/orgId，
+     *    且仅在提交值非空时覆盖，避免普通资料编辑把角色或归属清空；
+     *  - username、password、id、createdAt 不通过本接口修改（密码走 changePassword / resetPassword）。
+     *
+     * 权限：控制器层限制本人或 regulator / admin，服务层不重复鉴权。
+     *
+     * @param id   目标用户主键
+     * @param user 提交的资料，非白名单字段被忽略
+     * @return 更新后从库中重新读取的用户
+     * @throws ApiException 目标用户不存在时抛 404
+     */
     @Override
     public User update(Integer id, User user) {
         User current = getById(id);
+        // 操作者角色决定能否修改 role/status 等管理字段；上下文缺失时按非管理员处理
         LoginUser operator = UserContext.get();
         boolean manager = operator != null
                 && ("admin".equals(operator.getRole()) || "regulator".equals(operator.getRole()));
 
         // 白名单更新，防止通过本接口提权或篡改账号凭据：
         //  - 任何角色只能改资料展示字段；
-        //  - 仅监管/管理员可改 role 与 status；
-        //  - username / password / enterpriseId / orgId 一律不可通过本接口修改（密码走 changePassword）。
+        //  - 仅监管/管理员可改 role、status 与归属 enterpriseId / orgId；
+        //  - username / password 一律不可通过本接口修改（密码走 changePassword）。
         current.setName(user.getName());
         current.setPhone(user.getPhone());
         current.setEmail(user.getEmail());
@@ -129,6 +183,18 @@ public class UserServiceImpl implements UserService {
         return getById(id);
     }
 
+    /**
+     * 按主键删除用户，并先清理该用户的账号设置行。
+     *
+     * 事务原因：user_settings.user_id 外键指向 users.id，顺序颠倒会被外键约束拦截；
+     * 内置管理员账号（username 为 admin，忽略大小写）为系统保留账号，禁止删除。
+     * 业务表只以姓名字符串记录填报/审核人，不与 users 建外键，因此删除用户不会影响历史业务数据。
+     *
+     * 权限：控制器仅允许 regulator / admin 调用。
+     *
+     * @param id 用户主键
+     * @throws ApiException 用户不存在抛 404；内置管理员账号抛 400
+     */
     @Override
     @Transactional
     public void delete(Integer id) {
@@ -142,6 +208,17 @@ public class UserServiceImpl implements UserService {
         userMapper.deleteById(id);
     }
 
+    /**
+     * 管理员重置密码：覆盖为初始密码的 BCrypt 哈希，并解除该账号的登录失败锁定。
+     *
+     * 解锁仅清除本进程内存中的失败计数，不改动数据库状态；多实例部署时其他实例的计数不受影响。
+     *
+     * 权限：控制器仅允许 regulator / admin 调用；响应不回显密码。
+     *
+     * @param id 用户主键
+     * @return 重置后的用户实体
+     * @throws ApiException 用户不存在时抛 404
+     */
     @Override
     public User resetPassword(Integer id) {
         // 管理员重置：写入统一默认密码，并解除该账号的登录失败暂时锁定
@@ -152,6 +229,20 @@ public class UserServiceImpl implements UserService {
         return user;
     }
 
+    /**
+     * 修改密码：校验旧密码与长度约束后写入新密码的 BCrypt 哈希。
+     *
+     * 旧密码经 PasswordHasher.matches 校验，同时兼容 {bcrypt} 哈希与迁移前的明文存储；
+     * 新密码去除首尾空白后不足 6 位视为非法（避免弱口令与全空白密码）。
+     * 改密成功即清除该账号的连续失败计数（相当于本人已完成身份验证）。
+     *
+     * 权限：控制器限制本人或 regulator / admin。
+     *
+     * @param id          用户主键
+     * @param oldPassword 原密码（明文）
+     * @param newPassword 新密码（明文，去空白后长度 ≥ 6）
+     * @throws ApiException 用户不存在抛 404；旧密码不符、新密码为空或过短抛 400
+     */
     @Override
     public void changePassword(Integer id, String oldPassword, String newPassword) {
         User user = getById(id);
@@ -167,6 +258,15 @@ public class UserServiceImpl implements UserService {
         loginFails.remove(user.getUsername());
     }
 
+    /**
+     * 按账号精确查询用户（最多取一条）。
+     *
+     * 供登录与账号去重场景使用；空白账号直接返回 null，由调用方处理不存在的情况，
+     * 查询附带 limit 1 以避免脏数据下 selectOne 抛多行异常。
+     *
+     * @param username 登录账号
+     * @return 匹配的用户；账号为空或不存在时返回 null
+     */
     @Override
     public User findByUsername(String username) {
         // 空账号直接返回 null（登录/去重调用方需自行处理不存在场景）
@@ -176,6 +276,25 @@ public class UserServiceImpl implements UserService {
         return userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username).last("limit 1"));
     }
 
+    /**
+     * 登录校验：账号 + 密码 + 角色 + 状态四要素全部匹配才签发令牌。
+     *
+     * 流程与边界：
+     *  1. 先查内存失败计数，处于锁定期直接拒绝（429），不再校验密码，避免锁定期间继续试错；
+     *  2. 密码由 PasswordHasher.matches 校验，兼容 {bcrypt} 哈希与迁移前明文；
+     *  3. 角色必须与前端所选登录身份一致，status 不为 active 的账号一律拒绝；
+     *  4. 任一要素失败统一返回 400（而非 401），不区分“账号不存在/密码错/角色不符”，
+     *     避免账号枚举；同时累加失败次数，连续失败 5 次锁定 5 分钟；
+     *  5. 校验通过清零计数并签发 JWT（有效期由 carbon.jwt.expire-hours 控制）。
+     *
+     * 锁定状态仅存于本进程内存，重启即清空；多实例部署时各实例独立计数。
+     *
+     * @param username 登录账号
+     * @param password 明文密码
+     * @param role     前端选择的登录角色（enterprise/auditor/regulator/admin）
+     * @return 含 token（JWT）与 user（username/name/role/enterpriseId/orgId）的 Map
+     * @throws ApiException 锁定期内抛 429；账号、密码、角色或状态不匹配抛 400
+     */
     @Override
     public Map<String, Object> login(String username, String password, String role) {
         // 登录失败锁定：同一账号连续失败 5 次锁 5 分钟（内存计数，重启即解锁）
@@ -190,9 +309,11 @@ public class UserServiceImpl implements UserService {
                 || !PasswordHasher.matches(password, user.getPassword())
                 || !Objects.equals(user.getRole(), role)
                 || !"active".equals(user.getStatus())) {
+            // 失败分支不区分具体原因，统一计数并返回同一文案；lockedUntil 仅在本次达到上限时设置
             recordLoginFailure(username, fail);
             throw new ApiException(HttpStatus.BAD_REQUEST, "账号或密码错误，或角色不匹配");
         }
+        // 登录成功才清零计数：锁定只针对「连续」失败，成功一次即重置
         loginFails.remove(username);
 
         String token = jwtUtil.generateToken(user);
@@ -210,7 +331,12 @@ public class UserServiceImpl implements UserService {
         return result;
     }
 
-    /** 记录一次登录失败：累加计数，达到上限后设置锁定截止时间；锁定到期后由 login 校验逻辑放行 */
+    /**
+     * 记录一次登录失败：累加计数，达到上限后设置锁定截止时间；锁定到期后由 login 校验逻辑放行。
+     *
+     * 边界：锁定到期并不会清零计数，因此到期后再失败一次会从原计数继续累加并立即再次锁定；
+     * 只有登录成功、改密或管理员重置密码才移除计数。username 为 null 时无法按账号计数，直接忽略。
+     */
     private void recordLoginFailure(String username, LoginFail fail) {
         if (username == null) {
             return;
@@ -220,6 +346,14 @@ public class UserServiceImpl implements UserService {
         loginFails.put(username, new LoginFail(count, lockedUntil));
     }
 
+    /**
+     * 读取当前登录用户信息（由 AuthInterceptor 解析 JWT 后写入 UserContext）。
+     *
+     * 只返回令牌载荷中的展示字段，不回查数据库，因此用户资料变更需重新登录才会刷新。
+     *
+     * @return 含 username/name/role/enterpriseId/orgId 的 Map
+     * @throws ApiException 上下文无登录人（未登录或令牌失效）时抛 401
+     */
     @Override
     public Map<String, Object> currentUser() {
         LoginUser loginUser = UserContext.get();

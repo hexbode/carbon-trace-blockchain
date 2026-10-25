@@ -5,9 +5,21 @@
    - 衬线中文标题 + 等宽数字，强化“凭证 / 账本”气质
    - 账本式卡片（左侧刻线 + 细分隔线）、底部悬浮胶囊导航
    说明：仅在手机端覆盖样式，桌面端不受影响。
+
+   样式层级与断点分段：
+   1. global.css：桌面基础层 + 其文件末尾的 @media (max-width: 767px) 通用移动适配层；
+   2. 本文件：移动端视觉覆盖层，在 main.js 中于 global.css 之后加载，
+      同样锁定 767px 断点，负责主题变量、卡片形态、弹窗与动效；
+   3. 本文件内部末尾还有 prefers-reduced-motion 分支（嵌套媒体查询），
+      属于同一断点内的动效降级层，不改变断点分段。
    ============================================================ */
 
+/* 断点：与 useDevice 的 MOBILE_MAX_WIDTH（767）保持一致 */
 @media (max-width: 767px) {
+  /* ---------- 移动端设计变量 ----------
+     分组：墨绿/纸张底色（--m-ink / --m-paper）、线条与文字层级（--m-line / --m-muted）、
+     品牌与信号色（--m-primary / --m-signal）、状态色（--m-warn / --m-danger）、
+     字体栈（无衬线正文 / 衬线标题 / 等宽数字），以及 Element Plus 主题变量映射 */
   :root {
     --m-ink: #071a16;
     --m-ink-2: #0d2a22;
@@ -36,14 +48,16 @@
     --el-border-radius-base: 12px;
   }
 
+  /* ---------- 基础层：页面底色与移动端触控 ---------- */
   body {
     background: var(--m-paper);
     color: var(--m-ink);
     font-family: var(--m-font);
+    /* 关闭移动端点击时系统默认的灰色高亮块，交由组件自身反馈 */
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* ---------- 页面骨架 ---------- */
+  /* ---------- 页面骨架（页头标题 / 刻线 / 底部为悬浮导航预留空间）---------- */
   .page-container {
     padding: 16px 14px 96px;
   }
@@ -470,7 +484,9 @@
     color: var(--m-muted);
   }
 
-  /* ---------- 动效（尊重系统减弱动效设置） ---------- */
+  /* ---------- 动效层（尊重系统减弱动效设置） ----------
+     页面主区块与卡片按序号错峰入场；下方嵌套的 prefers-reduced-motion
+     分支在同一 767px 断点内关闭动画与过渡，属于降级层 */
   .content .page-container > *,
   .m-list > .m-card {
     will-change: opacity, transform;
@@ -492,6 +508,7 @@
   .m-list > .m-card:nth-child(5) { animation-delay: 0.12s; }
   .m-list > .m-card:nth-child(n + 6) { animation-delay: 0.15s; }
 
+  /* 入场关键帧：轻微上移 + 淡入，供页面区块与卡片列表复用 */
   @keyframes m-rise {
     from {
       opacity: 0;
@@ -503,6 +520,7 @@
     }
   }
 
+  /* 动效降级：系统开启“减弱动效”时取消入场动画与卡片按压缩放 */
   @media (prefers-reduced-motion: reduce) {
     .content .page-container > *,
     .m-list > .m-card {

@@ -13,6 +13,12 @@ import java.util.List;
 /**
  * 密码哈希一次性迁移：启动时把 users 表中残留的明文密码幂等地转换为 {bcrypt} 哈希。
  * 迁移后不影响登录（README 中的密码保持不变，只是存储形式变了）。
+ *
+ * 依赖：UserMapper（直接全表读取 users）。
+ * 安全边界 / 执行说明：
+ *   1. 迁移在启动阶段全表遍历，不做分批，数据量大时会拉长启动时间；
+ *   2. 迁移期间不会改变密码语义，只改变存储形态，因此不会让已有账号无法登录；
+ *   3. 迁移失败会抛出异常并中断启动（ApplicationRunner 同步执行），属于“宁可启动失败也不留明文”的取舍。
  */
 @Component
 public class PasswordMigrationRunner implements ApplicationRunner {
@@ -21,6 +27,7 @@ public class PasswordMigrationRunner implements ApplicationRunner {
 
     private final UserMapper userMapper;
 
+    /** 构造注入用户 Mapper，迁移逻辑只依赖该 Mapper，便于测试时替换 */
     public PasswordMigrationRunner(UserMapper userMapper) {
         this.userMapper = userMapper;
     }

@@ -9,6 +9,10 @@ import java.math.BigDecimal;
  *
  * 该对象是「链上存证」在后端的唯一表示：业务层核验时以它为准，
  * 其中 txHash / blockIndex 不在数据库落库，仅用于展示。
+ *
+ * 状态语义：{@code exists=false} 时除 status=NONE 外其余字段均无业务含义；
+ * 只有 VALID 可作为有效凭证，REVOKED / INVALID 均为终局状态且不可恢复。
+ * amount 已由网关从链上定点还原为十进制（÷100），调用方不要再做缩放。
  */
 @Data
 public class ChainCertificate {
@@ -61,7 +65,13 @@ public class ChainCertificate {
     /** 所在区块高度（链上回填，不落库） */
     private Long blockIndex;
 
-    /** 是否仍为有效状态（仅 VALID 可继续作为核验凭证） */
+    /**
+     * 是否仍为有效状态。
+     *
+     * 仅 VALID 可继续作为核验凭证；已撤销与已作废均视为不可用。
+     *
+     * @return true 表示 status 为 {@link ChainCertStatus#VALID}
+     */
     public boolean isActive() {
         return status == ChainCertStatus.VALID;
     }

@@ -40,6 +40,16 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         this.certificationService = certificationService;
     }
 
+    /**
+     * 按企业、审核状态、关键字过滤查询报告记录，按提交时间倒序；参数为空表示该条件不限制。
+     * keyword 同时匹配报告编号、企业名称、排放源名称。
+     * 查询后统一补全活动数据与排放因子（由排放记录回填，见 {@link #enrich}）。
+     *
+     * @param enterpriseId 企业编号，空则不筛选
+     * @param status       审核状态（pending / certified / rejected），空则不筛选
+     * @param keyword      关键字，空则不筛选
+     * @return 报告记录列表（已补全活动数据与因子）
+     */
     @Override
     public List<ReportRecord> list(String enterpriseId, String status, String keyword) {
         LambdaQueryWrapper<ReportRecord> wrapper = new LambdaQueryWrapper<>();
@@ -61,6 +71,13 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         return records;
     }
 
+    /**
+     * 按编号查询报告详情，并补全活动数据与排放因子。
+     *
+     * @param id 报告编号（三表同号）
+     * @return 报告记录（已补全活动数据与因子）
+     * @throws ApiException 404：报告记录不存在
+     */
     @Override
     public ReportRecord getById(String id) {
         ReportRecord record = reportRecordMapper.selectById(id);
@@ -100,7 +117,18 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         }
     }
 
-    /** 审核：结果非 certified/rejected 抛 400；同步更新关联排放记录状态，认证通过则触发认证上链 */
+    /**
+     * 审核报告（事务）：写入审核结论、审核人与审核时间，并同步关联排放记录的状态。
+     * 审核结果只允许 certified / rejected；certified 时调用认证服务生成/更新认证记录，
+     * 认证记录与本次审核在同一事务内落库，链上存证登记在事务提交后写入（失败重试，最终失败生成告警）。
+     * 注意：rejected 只改状态，不会撤销此前可能已生成的认证记录；若报告曾认证通过后又被驳回，
+     * 需在认证管理中另行撤销，链上才能体现失效。
+     *
+     * @param id   报告编号
+     * @param body 请求体，result 为审核结果（必填，certified / rejected），opinion 为审核意见（可选）
+     * @return 重新读取后的报告记录（状态、审核信息已更新）
+     * @throws ApiException 400：审核结果缺失或取值非法；404：报告记录不存在
+     */
     @Override
     @Transactional
     public ReportRecord audit(String id, Map<String, Object> body) {
@@ -133,7 +161,16 @@ public class ReportRecordServiceImpl implements ReportRecordService {
         return reportRecordMapper.selectById(id);
     }
 
-    /** 认证申请：报告与关联排放记录状态改回 pending，并清空审核信息 */
+    /**
+     * 认证申请（事务）：把报告与关联排放记录的状态改回 pending，并清空审核人、审核时间与审核意见。
+     * 不做原状态校验（已认证/已驳回的报告都可通过本接口重新申请）；
+     * 重新审核通过时认证记录按排放编号复用原编号更新，不会产生新的认证编号。
+     * 本方法不写链，链上存证不受影响；核验以链上状态为准，撤销需走认证撤销接口。
+     *
+     * @param id 报告编号
+     * @return 重新读取后的报告记录
+     * @throws ApiException 404：报告记录不存在
+     */
     @Override
     @Transactional
     public ReportRecord apply(String id) {

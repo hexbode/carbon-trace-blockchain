@@ -4,6 +4,12 @@
   顶部通过类型切换列表数据源（enterprises / audit_organizations / regulator_organizations）；
   新增/编辑弹窗内同样用类型三选一决定表单字段与写入的目标表；
   支持按名称（企业端还可按行业）筛选，以及详情、编辑、删除。
+  路由：/regulator/enterprise（name: EnterpriseManage，roles: regulator / admin）
+  依赖接口：@/api/enterprise（getEnterprises、getEnterpriseIndustries、create/update/deleteEnterprise）、
+           @/api/auditOrg（getAuditOrganizations、create/update/deleteAuditOrganization）、
+           @/api/regulatorOrg（getRegulatorOrganizations、create/update/deleteRegulatorOrganization）
+  说明：列表接口一次返回全量数据，名称/行业筛选在前端 computed 中完成，本页无分页组件；
+       新增与编辑均按类型只提交该类型的字段，避免把无关字段写入其它表。
 -->
 <template>
   <div class="page-container">
@@ -19,6 +25,7 @@
     </div>
 
     <!-- 筛选区：类型切换 + 名称（企业端额外支持按行业过滤） -->
+    <!-- 筛选在前端即时生效（见 filteredList），不重新请求接口；仅切换类型时才调用 load() -->
     <div class="panel mb-16">
       <div class="panel-body">
         <el-form :inline="true" :model="filters">
@@ -77,6 +84,7 @@
           </div>
         </div>
 
+        <!-- 桌面端表格（>767px）：先渲染公共列，再按当前类型追加专属列；状态列固定展示“正常” -->
         <el-table v-else :data="filteredList" stripe v-loading="loading">
           <el-table-column prop="id" :label="currentType.idLabel" min-width="120" align="center" />
           <el-table-column prop="name" :label="currentType.nameLabel" min-width="180" show-overflow-tooltip align="center" />
@@ -194,6 +202,7 @@
       </el-form>
       </div>
       <template #footer>
+        <!-- 保存时先执行 rules 校验，通过后按类型分派到对应接口 -->
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submitForm" :loading="submitting">保存</el-button>
       </template>
@@ -241,8 +250,9 @@ const activeType = ref('enterprise')
 const currentType = computed(() => TYPE_OPTIONS.find(t => t.value === activeType.value) || TYPE_OPTIONS[0])
 
 // ===== 筛选与列表 =====
+// 筛选条件（名称为关键字，行业仅企业端生效）
 const filters = reactive({ name: '', industry: '' })
-// 当前类型的单位列表
+// 当前类型的单位列表（接口返回全量数据，不做后端分页）
 const list = ref([])
 // 行业下拉选项（仅企业端使用）
 const industries = ref([])
@@ -250,6 +260,7 @@ const industries = ref([])
 const loading = ref(false)
 
 // 根据名称与行业条件过滤列表（行业条件仅在企业端生效）
+// 名称为包含匹配（模糊查询），全部在前端完成：接口一次返回全量数据，本页未接分页
 const filteredList = computed(() =>
   list.value.filter(e =>
     (!filters.name || (e.name || '').includes(filters.name)) &&
@@ -278,6 +289,7 @@ const TYPE_FIELDS = {
 // 提交按钮加载态
 const submitting = ref(false)
 // 表单校验规则：隐藏的分支不会被渲染，因此不会参与校验
+// 必填项仅做非空校验（触发方式：输入框 blur、下拉 change），电话未做格式校验
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
   industry: [{ required: true, message: '请选择行业', trigger: 'change' }],
@@ -291,6 +303,7 @@ const rules = {
 }
 
 // 拉取当前类型的数据（企业端同时拉取行业下拉选项）
+// 行业字典来自 /enterprises/industries（后端去重），同时供筛选栏与新增/编辑表单使用
 async function load() {
   loading.value = true
   try {
@@ -317,6 +330,7 @@ function onTypeChange() {
 }
 
 // 打开表单：传入 row 为编辑，否则为新增；新增时默认沿用当前列表类型
+// 先重置为空白表单再覆盖 row，避免上一次编辑的字段残留；编辑时类型控件禁用（见模板）
 function openForm(row) {
   Object.assign(form, emptyForm())
   if (row) Object.assign(form, row)
@@ -332,6 +346,7 @@ function buildPayload(type) {
 }
 
 // 校验通过后保存：按类型调用对应接口，成功后刷新列表
+// validate() 失败时 catch 返回 false，直接中断提交；提交期间禁用保存按钮（submitting）
 async function submitForm() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
@@ -359,6 +374,7 @@ async function submitForm() {
 }
 
 // 删除：按当前列表类型调用对应删除接口并刷新
+// 使用 ElMessageBox 二次确认；用户取消时走 catch 静默忽略
 function remove(row) {
   ElMessageBox.confirm(`确定删除${currentType.value.unit}「${row.name}」吗？`, '提示', { type: 'warning' }).then(async () => {
     if (activeType.value === 'enterprise') await deleteEnterprise(row.id)

@@ -5,6 +5,12 @@
            展示行业总数、监管企业数、累计排放、认证总数等汇总指标；
            通过各行业月度排放趋势折线图、行业排放占比饼图、企业排放排行表格，
            辅助监管人员进行碳排放趋势研判与监管决策。
+  路由：/regulator/industry-stats（name: IndustryStats，roles: regulator / admin）
+  依赖接口：@/api/stats 的 getRegulatorIndustrySummary（行业汇总，同时供饼图使用）、
+           getRegulatorIndustryRanking（行业排放排名）、getRegulatorEnterpriseRanking（企业排放排名）、
+           getRegulatorEnterpriseTrend（各行业月度趋势）；@/api/certification 的 getCertifications（认证记录）
+  统计口径：行业汇总的 emission 为该行业企业累计排放之和，percent 为占全部行业累计排放的比例；
+           顶部“累计排放/监管企业”由行业汇总逐项相加得到，“认证总数”取认证记录条数。
 -->
 <template>
   <div class="page-container">
@@ -15,6 +21,7 @@
     </div>
 
     <!-- 顶部统计卡片：行业总数 / 监管企业 / 累计排放 / 认证总数（点击切换下方明细视图） -->
+    <!-- 默认激活“监管企业”视图，即企业排放排行（activeView 初值为 enterprise） -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="6" v-for="s in stats" :key="s.label">
         <div class="stat-card clickable" :class="{ active: activeView === s.view }" @click="activeView = s.view">
@@ -25,6 +32,7 @@
     </el-row>
 
     <!-- 图表区域：各行业月度排放趋势折线图 + 行业排放占比饼图 -->
+    <!-- 折线图每个行业一条平滑曲线（数据来自 enterprise-trend），饼图按行业累计排放占比（数据来自行业汇总） -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="14">
         <div class="panel">
@@ -179,14 +187,15 @@ const { isMobile } = useDevice()
 const colors = ['#10b981', '#0ea5e9', '#f59e0b', '#8b5cf6', '#ef4444']
 
 // 行业汇总：[{industry, enterpriseCount, emission, certCount}]
+// 同时用于顶部“行业总数/累计排放/监管企业”指标、行业汇总表格与占比饼图
 const industrySummary = ref([])
-// 行业排放排行：[{industry, total, percent}]
+// 行业排放排行：[{industry, total, percent}]，percent 为占全部行业累计排放的百分比
 const industryRanking = ref([])
-// 企业排放排行：[{name, industry, total, percent, certCount}]
+// 企业排放排行：[{name, industry, total, percent, certCount}]，按累计排放量降序返回
 const enterpriseRanking = ref([])
-// 各行业月度趋势：{ months, series:[{name,data}] }
+// 各行业月度趋势：{ months:[YYYY-MM], series:[{name,data}] }，每个行业一条折线
 const trend = ref({ months: [], series: [] })
-// 认证记录明细
+// 认证记录明细：用于认证总数指标与认证记录视图
 const certList = ref([])
 // 加载态
 const loading = ref(false)
@@ -194,17 +203,19 @@ const loading = ref(false)
 // 横轴月份标签（由后端返回的 YYYY-MM 转换为 "n月"）
 const monthLabels = computed(() => trend.value.months.map(m => `${Number(m.slice(5))}月`))
 
-// 明细表格数据
+// 明细表格数据：直接使用接口返回值，不做二次加工
+// 行业汇总、行业排名、企业排名分别对应四个统计卡片中的三个视图
 const industryStats = computed(() => industrySummary.value)
 const industryEmission = computed(() => industryRanking.value)
 const enterpriseRank = computed(() => enterpriseRanking.value)
 
-// 累计碳排放总量
+// 累计碳排放总量：各行业 emission 相加（后端已按行业聚合，避免重复累加明细记录）
 const totalEmission = computed(() => industrySummary.value.reduce((s, i) => s + Number(i.emission || 0), 0))
-// 监管企业总数
+// 监管企业总数：各行业 enterpriseCount 相加
 const totalEnterprise = computed(() => industrySummary.value.reduce((s, i) => s + Number(i.enterpriseCount || 0), 0))
 
 // 顶部统计卡片数据：行业总数 / 监管企业 / 累计排放 / 认证总数（view 为点击后切换的明细视图）
+// 累计排放取整展示（toFixed(0)），业界统一单位 tCO₂
 const stats = computed(() => [
   { label: '行业总数', value: industrySummary.value.length, unit: '个', view: 'industry' },
   { label: '监管企业', value: totalEnterprise.value, unit: '家', view: 'enterprise' },
@@ -223,6 +234,7 @@ const viewTitle = computed(() => ({
 }[activeView.value]))
 
 // 各行业月度排放趋势折线图配置：每个行业一条平滑曲线
+// 系列直接来自 trend.series，图例与配色按行业顺序分配；数据更新后由 useECharts 自动重绘
 const trendOption = () => ({
   tooltip: { trigger: 'axis' },
   legend: { bottom: 0, textStyle: { fontSize: 11 } },
@@ -242,11 +254,12 @@ const trendOption = () => ({
 const { chartRef: trendChartRef } = useECharts(trendOption)
 
 // 饼图数据：各行业累计排放量
+// 取整是为了让 tooltip / 图例读数与表格展示口径一致（tCO₂ 整数）
 const pieData = computed(() => industrySummary.value.map(i => ({
   name: i.industry,
   value: Math.round(Number(i.emission || 0))
 })))
-// 行业排放占比饼图配置（环形图）
+// 行业排放占比饼图配置（环形图）：占比由 ECharts 依据各项数值自动计算
 const pieOption = () => ({
   tooltip: { trigger: 'item', formatter: '{b}: {c} tCO₂ ({d}%)' },
   legend: { bottom: 0, textStyle: { fontSize: 11 } },
@@ -262,9 +275,11 @@ const pieOption = () => ({
 const { chartRef: pieChartRef } = useECharts(pieOption)
 
 // 拉取行业统计与认证数据
+// 五个接口并行请求，任一失败都会进入 finally 关闭 loading；空值统一兜底为空数组/空趋势
 async function load() {
   loading.value = true
   try {
+    // 返回依次为：行业汇总 / 行业排名 / 企业排名 / 月度趋势 / 认证记录
     const [summary, ranking, entRanking, trendData, certs] = await Promise.all([
       getRegulatorIndustrySummary(),
       getRegulatorIndustryRanking(),
@@ -287,6 +302,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）：基础样式，本页无 scoped 断点规则 ===== */
+/* ===== 移动端（≤767px）：由 isMobile 压缩图表高度（240px）并切换卡片列表，卡片外观来自全局 mobile.css ===== */
 /* 可点击的统计卡片：手型光标提示可交互 */
 .stat-card.clickable { cursor: pointer; }
 /* 统计卡片选中态：主题色边框 + 浅绿背景，标识当前激活的明细视图 */

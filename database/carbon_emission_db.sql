@@ -3,12 +3,51 @@
 -- MySQL 8.x 数据库脚本（表结构 + 初始数据）
 -- 由前端 src/mock/data.js 与 src/utils/blockchain.js 的真实数据结构导出
 -- 字符集：utf8mb4（支持 tCO₂ 中的下标 ₂）
+--
+-- 【用途】
+--   基准建表脚本：创建碳链通业务库的核心表，并写入一套可直接演示的初始数据
+--   （4 家企业、48 条 2024 年度排放记录，以及报告/认证/告警等派生数据）。
+--
+-- 【执行顺序】（脚本编号即推荐顺序）
+--   0) 先建库：CREATE DATABASE `carbon_emission` DEFAULT CHARSET utf8mb4;
+--   1) carbon_emission_db.sql          基准表结构 + 演示数据（本文件）
+--   2) 03_profile_settings.sql         users 增加 email/signature，新建 user_settings
+--   3) 04_regulator_organizations.sql  新建监管机构表
+--   4) 05_sync_triggers.sql            排放/报告/认证/链上交易四表联动触发器
+--   5) 06_align_schema.sql             放宽 report_records / certification_records 的空值约束
+--   6) 07_align_all_schema.sql         放宽其余各表的空值约束与字段长度
+--   7) 08_user_avatar.sql              users 增加 avatar
+--
+-- 【依赖】
+--   MySQL 8.0+；库 carbon_emission 需已存在（本文件不含 CREATE DATABASE / USE，
+--   执行时须显式指定库，例如：mysql -uroot -p -D carbon_emission < carbon_emission_db.sql）。
+--
+-- 【幂等性】
+--   结构层面可重复执行：每张表都是 DROP TABLE IF EXISTS 后重建；
+--   但数据层面是破坏性的——重跑会清空这些表的现有数据并重置为脚本内置演示数据。
+--   请勿在有真实业务数据的库上直接重跑。
+--
+-- 【重要：链上链表已下线】
+--   本文件中的 `blocks`（区块表）与 `block_transactions`（区块交易表）属于早期
+--   本地模拟链表，链模式改造后（stub 离线桩 / WeBASE 真实联盟链）后端已不再读写。
+--   当前实际数据库为 11 张表：
+--     enterprises、emission_sources、emission_factors、audit_organizations、
+--     users、user_settings、regulator_organizations、emission_records、
+--     report_records、certification_records、alerts
+--   与实库的差异：
+--     · 本文件的 blocks / block_transactions 在实库中不存在，应删除；
+--     · 实库的 user_settings、regulator_organizations 由 03、04 脚本创建，本文件未包含。
+--   重建库前必须先更新本脚本，否则重建结果与实际库结构不一致。
 -- ============================================================
 
+-- 会话字符集设为 utf8mb4，确保脚本内 tCO₂ 等特殊字符正确入库
 SET NAMES utf8mb4;
+-- 关闭外键检查：DROP 阶段各表互有外键，关闭后才能安全地按倒序删除；脚本末尾恢复
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- 按依赖关系倒序删除，便于重复执行
+-- 【已下线】block_transactions / blocks 为本地模拟链表，实际库（11 张表）中不存在，
+--           重建库前应连同文件后半部分的对应 INSERT 一起删除。
 DROP TABLE IF EXISTS `block_transactions`;
 DROP TABLE IF EXISTS `blocks`;
 DROP TABLE IF EXISTS `certification_records`;
@@ -25,208 +64,377 @@ DROP TABLE IF EXISTS `enterprises`;
 -- 一、表结构
 -- ============================================================
 
--- 1. 企业信息表
+-- ------------------------------------------------------------
+-- 1. 企业信息表 enterprises —— 企业端主体档案
+--    约束：id 为企业编号（业务主键）；credit_code（统一社会信用代码）全库唯一；
+--          status 仅 active / inactive 两态，停用企业仍保留历史排放数据。
+--    索引：uk_enterprise_credit 防止重复登记；idx_enterprise_industry 支撑按行业筛选与统计。
+--    外键：被 users、emission_records、report_records、certification_records、alerts 引用，
+--          删除企业前须先清理关联业务数据，否则报外键错误 1451。
+--    字段分组：① 主体标识 ② 联系与注册信息 ③ 状态
+-- ------------------------------------------------------------
 CREATE TABLE `enterprises` (
+  -- ① 主体标识
   `id`            VARCHAR(20)  NOT NULL                COMMENT '企业编号',
   `name`          VARCHAR(100) NOT NULL                COMMENT '企业名称',
   `industry`      VARCHAR(50)  NOT NULL                COMMENT '所属行业',
   `credit_code`   VARCHAR(30)  NOT NULL                COMMENT '统一社会信用代码',
+  -- ② 联系与注册信息（均可空，新增企业时可暂不填写）
   `contact`       VARCHAR(50)           DEFAULT NULL   COMMENT '联系人',
   `phone`         VARCHAR(30)           DEFAULT NULL   COMMENT '联系电话',
   `address`       VARCHAR(200)          DEFAULT NULL   COMMENT '注册地址',
   `scope`         VARCHAR(200)          DEFAULT NULL   COMMENT '核算范围',
   `registered_at` DATE                  DEFAULT NULL   COMMENT '注册时间',
+  -- ③ 状态
   `status`        VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT '状态：active 正常 / inactive 停用',
+  -- 主键：企业编号（业务编号，非自增）
   PRIMARY KEY (`id`),
+  -- 统一社会信用代码唯一，作为企业实名登记的去重依据
   UNIQUE KEY `uk_enterprise_credit` (`credit_code`),
+  -- 行业索引：列表筛选、行业分布统计
   KEY `idx_enterprise_industry` (`industry`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='企业信息表';
 
--- 2. 排放源字典表
+-- ------------------------------------------------------------
+-- 2. 排放源字典表 emission_sources —— 排放源与默认排放因子对照
+--    约束：所有字段均 NOT NULL；code 为业务主键（S01~S05）。
+--    外键：emission_records.source_code 引用本表，新增排放源须先在此登记。
+--    字段分组：① 标识与名称 ② 默认因子与单位
+-- ------------------------------------------------------------
 CREATE TABLE `emission_sources` (
+  -- ① 标识与名称
   `code`   VARCHAR(10)  NOT NULL COMMENT '排放源编码',
   `name`   VARCHAR(50)  NOT NULL COMMENT '排放源名称',
+  -- ② 默认因子与单位：仅作推荐值，实际核算以 emission_records.emission_factor 为准
   `factor` DECIMAL(10,4) NOT NULL COMMENT '默认排放因子',
   `unit`   VARCHAR(30)  NOT NULL COMMENT '排放因子单位',
+  -- 主键：排放源编码
   PRIMARY KEY (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='排放源字典表';
 
--- 3. 碳排放因子库（监管端维护的标准因子）
+-- ------------------------------------------------------------
+-- 3. 碳排放因子库 emission_factors —— 监管端维护的标准因子
+--    约束：category 限定化石燃料/购入能源/工业过程；status=inactive 表示停用，
+--          停用后仍保留历史引用，不物理删除。
+--    索引：idx_factor_category 支撑按类别筛选与因子下拉框过滤。
+--    字段分组：① 标识 ② 因子定义 ③ 维护信息
+-- ------------------------------------------------------------
 CREATE TABLE `emission_factors` (
+  -- ① 标识
   `id`         INT           NOT NULL                COMMENT '主键',
+  -- ② 因子定义
   `source`     VARCHAR(100)  NOT NULL                COMMENT '排放源名称',
   `category`   VARCHAR(30)   NOT NULL                COMMENT '类别：化石燃料/购入能源/工业过程',
   `factor`     DECIMAL(10,4) NOT NULL                COMMENT '排放因子取值',
   `unit`       VARCHAR(30)   NOT NULL                COMMENT '单位',
   `standard`   VARCHAR(50)            DEFAULT NULL   COMMENT '依据标准',
+  -- ③ 维护信息
   `updated_at` DATE                   DEFAULT NULL   COMMENT '更新时间',
   `status`     VARCHAR(20)   NOT NULL DEFAULT 'active' COMMENT '状态：active 启用 / inactive 停用',
+  -- 主键：自增代理键
   PRIMARY KEY (`id`),
+  -- 类别索引：按化石燃料/购入能源/工业过程分组展示与筛选
   KEY `idx_factor_category` (`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='碳排放因子库表';
 
--- 4. 审核机构表
+-- ------------------------------------------------------------
+-- 4. 审核机构表 audit_organizations —— 第三方核查/认证机构档案
+--    约束：id 为机构编号（业务主键）；short_name/code 可空，便于兼容历史数据。
+--    外键：users.org_id 引用本表 id，删除机构前须先处理其审核人员账号。
+--    字段分组：① 机构标识 ② 联系人与资质 ③ 状态与入驻时间
+-- ------------------------------------------------------------
 CREATE TABLE `audit_organizations` (
+  -- ① 机构标识
   `id`            VARCHAR(20)  NOT NULL              COMMENT '机构编号',
   `name`          VARCHAR(100) NOT NULL              COMMENT '机构名称',
   `short_name`    VARCHAR(50)           DEFAULT NULL COMMENT '机构简称',
   `code`          VARCHAR(20)           DEFAULT NULL COMMENT '机构代码',
+  -- ② 联系人与资质
   `contact`       VARCHAR(50)           DEFAULT NULL COMMENT '联系人',
   `phone`         VARCHAR(30)           DEFAULT NULL COMMENT '联系电话',
   `qualification` VARCHAR(50)           DEFAULT NULL COMMENT '资质证书号',
   `scope`         VARCHAR(200)          DEFAULT NULL COMMENT '业务范围',
+  -- ③ 状态与入驻时间
   `status`        VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT '状态',
   `created_at`    DATE                  DEFAULT NULL COMMENT '入驻时间',
+  -- 主键：机构编号（业务编号）
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审核机构表';
 
--- 5. 系统用户表
+-- ------------------------------------------------------------
+-- 5. 系统用户表 users —— 四类角色共表
+--    角色归属：enterprise 绑定 enterprise_id；auditor 绑定 org_id；
+--              regulator / admin 两者均为空。
+--    索引：uk_user_username 防重复账号；idx_user_role 支撑按角色查询与登录校验。
+--    外键：enterprise_id → enterprises.id、org_id → audit_organizations.id。
+--    安全提示：password 为演示用明文（默认 123456），生产环境必须改为哈希存储。
+--    字段分组：① 登录凭证 ② 身份与归属 ③ 联系方式与状态
+--    说明：03 脚本追加 email/signature，08 脚本追加 avatar。
+-- ------------------------------------------------------------
 CREATE TABLE `users` (
+  -- ① 登录凭证
   `id`            INT          NOT NULL AUTO_INCREMENT COMMENT '主键',
   `username`      VARCHAR(50)  NOT NULL                COMMENT '登录账号',
   `password`      VARCHAR(100) NOT NULL DEFAULT '123456' COMMENT '登录密码（演示用明文）',
+  -- ② 身份与归属
   `name`          VARCHAR(50)           DEFAULT NULL   COMMENT '姓名',
   `role`          VARCHAR(20)  NOT NULL                COMMENT '角色：enterprise/auditor/regulator/admin',
   `enterprise_id` VARCHAR(20)           DEFAULT NULL   COMMENT '所属企业（企业用户）',
   `org_id`        VARCHAR(20)           DEFAULT NULL   COMMENT '所属机构（审核人员）',
+  -- ③ 联系方式与状态
   `phone`         VARCHAR(30)           DEFAULT NULL   COMMENT '联系电话',
   `status`        VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT '状态',
   `created_at`    DATE                  DEFAULT NULL   COMMENT '创建时间',
+  -- 主键：自增代理键，同时是 user_settings.user_id 的外键目标
   PRIMARY KEY (`id`),
+  -- 登录账号唯一，避免同名账号并存
   UNIQUE KEY `uk_user_username` (`username`),
+  -- 角色索引：权限校验与按角色统计
   KEY `idx_user_role` (`role`),
+  -- 企业外键：企业用户必须归属一家已登记企业
   CONSTRAINT `fk_user_enterprise` FOREIGN KEY (`enterprise_id`) REFERENCES `enterprises` (`id`),
+  -- 机构外键：审核人员必须归属一家已登记审核机构
   CONSTRAINT `fk_user_org` FOREIGN KEY (`org_id`) REFERENCES `audit_organizations` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
 
--- 6. 碳排放数据记录表
+-- ------------------------------------------------------------
+-- 6. 碳排放数据记录表 emission_records —— 全链路主表
+--    业务：企业按「报告期（YYYY-MM）× 排放源」提交的核算明细。
+--          report_records、certification_records 均由本表派生，05 脚本用触发器维护联动。
+--    约束：amount 由后端按 activity_data × emission_factor 计算后落库（单位 tCO₂），
+--          非数据库生成列；fingerprint 为 SHA-256 电子防伪码，用于公开核验。
+--    索引：idx_em_enterprise 企业维度列表/统计；idx_em_period 按报告期筛选；
+--          idx_em_status 待审核/已认证队列；idx_em_source 按排放源汇总。
+--    外键：enterprise_id → enterprises.id；source_code → emission_sources.code。
+--    字段分组：① 标识与归属 ② 报告期与排放源 ③ 核算数据 ④ 认证状态与防伪
+--              ⑤ 提交信息
+-- ------------------------------------------------------------
 CREATE TABLE `emission_records` (
+  -- ① 标识与归属
   `id`              VARCHAR(20)   NOT NULL              COMMENT '排放记录编号',
   `enterprise_id`   VARCHAR(20)   NOT NULL              COMMENT '企业编号',
   `enterprise_name` VARCHAR(100)  NOT NULL              COMMENT '企业名称（冗余，便于列表展示）',
+  -- ② 报告期与排放源
   `period`          VARCHAR(10)   NOT NULL              COMMENT '报告期，格式 YYYY-MM',
   `source_code`     VARCHAR(10)   NOT NULL              COMMENT '排放源编码',
   `source_name`     VARCHAR(50)   NOT NULL              COMMENT '排放源名称',
+  -- ③ 核算数据：活动数据 × 排放因子 = 排放量，单位固定 tCO₂
   `activity_data`   DECIMAL(12,2) NOT NULL              COMMENT '活动数据',
   `activity_unit`   VARCHAR(20)            DEFAULT NULL COMMENT '活动数据单位',
   `emission_factor` DECIMAL(10,4) NOT NULL              COMMENT '本次核算使用的排放因子',
   `amount`          DECIMAL(14,2) NOT NULL              COMMENT '碳排放量 = 活动数据 × 排放因子',
   `unit`            VARCHAR(10)   NOT NULL DEFAULT 'tCO₂' COMMENT '排放量单位',
+  -- ④ 认证状态与防伪
   `status`          VARCHAR(20)   NOT NULL DEFAULT 'pending' COMMENT '认证状态：certified 已认证 / pending 待审核 / rejected 已驳回',
   `fingerprint`     VARCHAR(70)            DEFAULT NULL COMMENT '电子防伪码（SHA-256 哈希）',
+  -- ⑤ 提交信息
   `created_at`      DATETIME               DEFAULT NULL COMMENT '提交时间',
   `reporter`        VARCHAR(50)            DEFAULT NULL COMMENT '填报人',
+  -- 主键：排放记录编号（业务编号）
   PRIMARY KEY (`id`),
+  -- 企业维度索引：企业端列表、按企业汇总统计
   KEY `idx_em_enterprise` (`enterprise_id`),
+  -- 报告期索引：按月筛选与趋势统计
   KEY `idx_em_period` (`period`),
+  -- 状态索引：待审核/已驳回工作队列
   KEY `idx_em_status` (`status`),
+  -- 排放源索引：按排放源汇总排放量
   KEY `idx_em_source` (`source_code`),
+  -- 企业外键
   CONSTRAINT `fk_em_enterprise` FOREIGN KEY (`enterprise_id`) REFERENCES `enterprises` (`id`),
+  -- 排放源外键：必须使用已登记排放源编码
   CONSTRAINT `fk_em_source` FOREIGN KEY (`source_code`) REFERENCES `emission_sources` (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='碳排放数据记录表';
 
--- 7. 报告提交记录表
+-- ------------------------------------------------------------
+-- 7. 报告提交记录表 report_records —— 排放记录的审核流转载体
+--    业务：新增排放记录时由 05 脚本的 trg_emission_ai 自动生成同号报告（id = 排放记录 id），
+--          status 从 pending 流转到 certified/rejected，审核人/意见/时间在审核时回填。
+--    约束：id 与 emission_records.id 一一对应；emission_id 可空以兼容历史报告；
+--          status 无数据库默认值，由业务或触发器显式给出。
+--    索引：idx_rpt_enterprise 企业维度；idx_rpt_status 审核队列；idx_rpt_emission 反查关联排放。
+--    外键：emission_id → emission_records.id；enterprise_id → enterprises.id。
+--    字段分组：① 标识与关联 ② 报告内容 ③ 审核流转
+-- ------------------------------------------------------------
 CREATE TABLE `report_records` (
+  -- ① 标识与关联
   `id`              VARCHAR(20)   NOT NULL              COMMENT '报告编号',
   `emission_id`     VARCHAR(20)            DEFAULT NULL COMMENT '关联排放记录编号',
   `enterprise_id`   VARCHAR(20)   NOT NULL              COMMENT '企业编号',
   `enterprise_name` VARCHAR(100)  NOT NULL              COMMENT '企业名称',
   `period`          VARCHAR(10)   NOT NULL              COMMENT '报告期 YYYY-MM',
+  -- ② 报告内容
   `source_name`     VARCHAR(50)            DEFAULT NULL COMMENT '排放源名称',
   `amount`          DECIMAL(14,2) NOT NULL              COMMENT '排放量',
   `status`          VARCHAR(20)   NOT NULL              COMMENT '审核状态：certified/pending/rejected',
   `fingerprint`     VARCHAR(70)            DEFAULT NULL COMMENT '电子防伪码',
   `submitter`       VARCHAR(50)            DEFAULT NULL COMMENT '提交人',
   `submitted_at`    DATETIME               DEFAULT NULL COMMENT '提交时间',
+  -- ③ 审核流转（待审核时 auditor/audited_at/audit_opinion 为空）
   `auditor`         VARCHAR(50)            DEFAULT NULL COMMENT '审核人',
   `audited_at`      DATETIME               DEFAULT NULL COMMENT '审核时间',
   `audit_opinion`   TEXT                            COMMENT '审核意见',
+  -- 主键：报告编号（与排放记录同号）
   PRIMARY KEY (`id`),
+  -- 企业维度索引
   KEY `idx_rpt_enterprise` (`enterprise_id`),
+  -- 审核状态索引：待审核列表
   KEY `idx_rpt_status` (`status`),
+  -- 排放记录反查索引：按 emission_id 定位派生报告
   KEY `idx_rpt_emission` (`emission_id`),
+  -- 排放记录外键
   CONSTRAINT `fk_rpt_emission` FOREIGN KEY (`emission_id`) REFERENCES `emission_records` (`id`),
+  -- 企业外键
   CONSTRAINT `fk_rpt_enterprise` FOREIGN KEY (`enterprise_id`) REFERENCES `enterprises` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='报告提交记录表';
 
--- 8. 认证记录表（上链存证的认证凭证）
+-- ------------------------------------------------------------
+-- 8. 认证记录表 certification_records —— 上链存证的认证凭证
+--    业务：审核通过后生成，记录链上交易哈希与区块高度，是公开查询/二维码核验的依据。
+--    约束：uk_cert_emission 保证一条排放记录最多只有一张有效认证凭证；
+--          status 支持 valid → revoked 的撤销留痕（保留撤销原因与时间）。
+--    索引：uk_cert_emission 防重复发证；idx_cert_enterprise 企业维度；
+--          idx_cert_block 按区块高度回溯（链表下线后仅作历史字段保留）。
+--    外键：emission_id → emission_records.id；enterprise_id → enterprises.id。
+--    字段分组：① 标识与关联 ② 认证内容 ③ 链上存证 ④ 审核与撤销
+-- ------------------------------------------------------------
 CREATE TABLE `certification_records` (
+  -- ① 标识与关联
   `id`              VARCHAR(20)   NOT NULL              COMMENT '认证编号',
   `emission_id`     VARCHAR(20)            DEFAULT NULL COMMENT '关联排放记录编号',
   `enterprise_id`   VARCHAR(20)   NOT NULL              COMMENT '企业编号',
   `enterprise_name` VARCHAR(100)  NOT NULL              COMMENT '企业名称',
   `period`          VARCHAR(10)   NOT NULL              COMMENT '报告期 YYYY-MM',
+  -- ② 认证内容
   `amount`          DECIMAL(14,2) NOT NULL              COMMENT '认证排放量',
   `fingerprint`     VARCHAR(70)            DEFAULT NULL COMMENT '电子防伪码',
+  -- ③ 链上存证（tx_hash/block_index 由链网关回填；stub 模式下为桩内模拟值）
   `tx_hash`         VARCHAR(70)            DEFAULT NULL COMMENT '区块链交易哈希',
   `block_index`     INT                    DEFAULT NULL COMMENT '所在区块高度',
+  -- ④ 审核与撤销
   `auditor`         VARCHAR(50)            DEFAULT NULL COMMENT '审核人',
   `audit_opinion`   TEXT                            COMMENT '审核意见',
   `certified_at`    DATETIME               DEFAULT NULL COMMENT '认证时间',
   `status`          VARCHAR(20)   NOT NULL DEFAULT 'valid' COMMENT '状态：valid 有效 / revoked 已撤销',
   `revoke_reason`   VARCHAR(255)           DEFAULT NULL COMMENT '撤销原因',
   `revoked_at`      DATETIME               DEFAULT NULL COMMENT '撤销时间',
+  -- 主键：认证编号
   PRIMARY KEY (`id`),
+  -- 一条排放记录仅允许一张认证凭证，防止重复发证
   UNIQUE KEY `uk_cert_emission` (`emission_id`),
+  -- 企业维度索引：企业证书列表
   KEY `idx_cert_enterprise` (`enterprise_id`),
+  -- 区块高度索引：历史链上回溯（链表下线后仅作兼容保留）
   KEY `idx_cert_block` (`block_index`),
+  -- 排放记录外键
   CONSTRAINT `fk_cert_emission` FOREIGN KEY (`emission_id`) REFERENCES `emission_records` (`id`),
+  -- 企业外键
   CONSTRAINT `fk_cert_enterprise` FOREIGN KEY (`enterprise_id`) REFERENCES `enterprises` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='认证记录表';
 
--- 9. 区块表（模拟联盟链）
+-- ------------------------------------------------------------
+-- 9. 区块链-区块表 blocks【已下线的本地模拟链表】
+--    ⚠ 该表属于早期「自建 PoW 模拟链」实现，链模式改造（stub / WeBASE）后
+--      后端不再读写；当前实际库（11 张表）中不存在本表。
+--    保留原因：仅作为历史演示数据与旧版前端结构的存档说明。
+--    重建库前应删除本表及文件末尾对应的 INSERT。
+--    字段分组：① 链结构（block_index/hash/previous_hash/timestamp）
+--              ② PoW 与打包信息（merkle_root/nonce/miner）
+--              ③ 统计（tx_count）
+-- ------------------------------------------------------------
 CREATE TABLE `blocks` (
+  -- ① 链结构
   `block_index`   INT          NOT NULL COMMENT '区块高度（0 为创世区块）',
   `hash`          VARCHAR(70)  NOT NULL COMMENT '区块哈希',
   `previous_hash` VARCHAR(70)  NOT NULL COMMENT '前一区块哈希',
   `timestamp`     BIGINT       NOT NULL COMMENT '区块时间戳（毫秒）',
+  -- ② PoW 与打包信息
   `merkle_root`   VARCHAR(70)           DEFAULT NULL COMMENT '默克尔根',
   `nonce`         INT          NOT NULL DEFAULT 0 COMMENT 'PoW 随机数',
   `miner`         VARCHAR(50)           DEFAULT NULL COMMENT '打包节点',
+  -- ③ 统计
   `tx_count`      INT          NOT NULL DEFAULT 0 COMMENT '区块内交易数',
+  -- 主键：区块高度（链式递增，创世区块为 0）
   PRIMARY KEY (`block_index`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区块链-区块表';
 
--- 10. 区块交易表
+-- ------------------------------------------------------------
+-- 10. 区块链-区块交易表 block_transactions【已下线的本地模拟链表】
+--    ⚠ 同 blocks：后端已不再读写，当前实际库中不存在本表。
+--    原业务：每 4 笔认证交易打包进一个区块，与 certification_records 通过
+--            emission_id / tx_hash 对应。
+--    索引：uk_tx_hash 防交易重复；idx_bt_block 按区块聚合交易。
+--    外键：block_index → blocks.block_index（两表需一起删除，否则外键失配）。
+--    字段分组：① 交易标识与所属区块 ② 业务快照（排放记录/企业/报告期/排放量/防伪码）
+--              ③ 审核人
+-- ------------------------------------------------------------
 CREATE TABLE `block_transactions` (
+  -- ① 交易标识与所属区块
   `id`              BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键',
   `block_index`     INT           NOT NULL              COMMENT '所属区块高度',
   `tx_hash`         VARCHAR(70)   NOT NULL              COMMENT '交易哈希',
+  -- ② 业务快照
   `emission_id`     VARCHAR(20)            DEFAULT NULL COMMENT '关联排放记录编号',
   `enterprise_name` VARCHAR(100)           DEFAULT NULL COMMENT '企业名称',
   `period`          VARCHAR(10)            DEFAULT NULL COMMENT '报告期',
   `amount`          DECIMAL(14,2)          DEFAULT NULL COMMENT '排放量',
   `fingerprint`     VARCHAR(70)            DEFAULT NULL COMMENT '电子防伪码',
+  -- ③ 审核人
   `auditor`         VARCHAR(50)            DEFAULT NULL COMMENT '审核人',
+  -- 主键：自增代理键
   PRIMARY KEY (`id`),
+  -- 交易哈希唯一，防止同一笔交易重复入块
   UNIQUE KEY `uk_tx_hash` (`tx_hash`),
+  -- 区块维度索引：按区块高度查询交易列表
   KEY `idx_bt_block` (`block_index`),
+  -- 区块外键：交易必须归属一个已存在的区块
   CONSTRAINT `fk_bt_block` FOREIGN KEY (`block_index`) REFERENCES `blocks` (`block_index`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区块链-区块交易表';
 
--- 11. 异常告警表
+-- ------------------------------------------------------------
+-- 11. 异常告警表 alerts —— 监管端风险提示
+--    业务：按类型（数据异常/因子不符/迟报）与级别（高/中/低）记录待处理事项，
+--          status 由 pending 流转到 resolved。
+--    索引：idx_alert_enterprise 企业维度；idx_alert_status 待处理队列；idx_alert_level 按级别筛选。
+--    外键：enterprise_id → enterprises.id，可空（允许全局告警）。
+--    字段分组：① 标识与归属 ② 告警内容 ③ 状态与时间
+-- ------------------------------------------------------------
 CREATE TABLE `alerts` (
+  -- ① 标识与归属
   `id`              VARCHAR(20)  NOT NULL              COMMENT '告警编号',
   `enterprise_id`   VARCHAR(20)           DEFAULT NULL COMMENT '企业编号',
   `enterprise_name` VARCHAR(100)          DEFAULT NULL COMMENT '企业名称',
+  -- ② 告警内容
   `type`            VARCHAR(30)  NOT NULL              COMMENT '告警类型：data_anomaly/factor_mismatch/late_report',
   `type_label`      VARCHAR(30)           DEFAULT NULL COMMENT '类型中文名',
   `level`           VARCHAR(10)  NOT NULL              COMMENT '级别：high 高危 / medium 中危 / low 低危',
   `message`         VARCHAR(300)          DEFAULT NULL COMMENT '告警内容',
   `period`          VARCHAR(10)           DEFAULT NULL COMMENT '涉及报告期',
+  -- ③ 状态与时间
   `status`          VARCHAR(20)  NOT NULL DEFAULT 'pending' COMMENT '状态：pending 待处理 / resolved 已处理',
   `created_at`      DATETIME              DEFAULT NULL COMMENT '触发时间',
+  -- 主键：告警编号
   PRIMARY KEY (`id`),
+  -- 企业维度索引
   KEY `idx_alert_enterprise` (`enterprise_id`),
+  -- 状态索引：待处理告警列表
   KEY `idx_alert_status` (`status`),
+  -- 级别索引：高危告警优先展示
   KEY `idx_alert_level` (`level`),
+  -- 企业外键（可空，允许不绑定企业的全局告警）
   CONSTRAINT `fk_alert_enterprise` FOREIGN KEY (`enterprise_id`) REFERENCES `enterprises` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异常告警表';
 
+-- 恢复外键检查，后续 DML 仍受外键约束保护
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================
--- 二、初始数据
+-- 二、初始数据（演示数据）
+--    顺序按外键依赖排列：字典/主体 → 用户 → 排放 → 报告 → 认证 → 链表 → 告警，
+--    因此可在外键检查开启状态下直接执行。
+--    这些数据用于前端演示与接口冒烟测试，日期/数值均为固定样例值。
+--    注意：下方「区块链-区块」「区块链-区块交易」两段 INSERT 对应已下线链表，
+--          重建库前应与建表语句一并删除。
 -- ============================================================
 
 
@@ -412,6 +620,7 @@ INSERT INTO `certification_records` (`id`, `emission_id`, `enterprise_id`, `ente
   ('CERT000033', 'EM000047', 'ENT20240004', '东方电力集团', '2024-11', 558.42, '0x573c30f6442d50144cc02043416f899daf5acd99b44f6b5b09abc83b644acb0c', '0xc29d3908e94744a9bf9cdccafccf3746441cafda038c67a2391a78be1d66fa92', 9, '周主任', '数据真实有效，排放因子使用符合《企业温室气体排放核算方法与报告指南》，予以认证。', '2026-09-21 14:53:30', 'valid', NULL, NULL);
 
 -- 区块链-区块（含创世区块，PoW 难度 2）
+-- 【已下线】仅作历史演示存档；实库无 blocks 表，重建库时应删除本段 INSERT。
 INSERT INTO `blocks` (`block_index`, `hash`, `previous_hash`, `timestamp`, `merkle_root`, `nonce`, `miner`, `tx_count`) VALUES
   (0, '0x35139c1cd65d7be9b5aae15d6e6aca224c3b2af3acfa4be7b089a0bdf4be3cfc', '0x0000000000000000000000000000000000000000000000000000000000000000', 1790568410943, '0x12af4cc063812fe6ef52de1b954c8894474d701224ffb1bf9436c3fdbcd2edc1', 0, '监管节点-01', 0),
   (1, '0x0039dab980ca9c6ddf3fce3656cfb9e81e85070c8a1c857c6383bb068ee87d80', '0x35139c1cd65d7be9b5aae15d6e6aca224c3b2af3acfa4be7b089a0bdf4be3cfc', 1790576430943, '0x12af4cc063812fe6ef52de1b954c8894474d701224ffb1bf9436c3fdbcd2edc1', 183, '监管节点-02', 4),
@@ -425,6 +634,7 @@ INSERT INTO `blocks` (`block_index`, `hash`, `previous_hash`, `timestamp`, `merk
   (9, '0x00951022dc678b961eff693bd5785946c8a31ed8ced4bad6052c525eaf9d5141', '0x0028a7f911b7ca00513442b2cc76bc9ccf45507de50f7289188dd58c8938f72a', 1790578350957, '0x5ca90b7251a9576f970675761935516eae5eee84964e4dcdadfade06a1e01b94', 93, '监管节点-01', 1);
 
 -- 区块链-区块交易（每 4 笔认证交易打包为一个区块）
+-- 【已下线】仅作历史演示存档；实库无 block_transactions 表，重建库时应删除本段 INSERT。
 INSERT INTO `block_transactions` (`block_index`, `tx_hash`, `emission_id`, `enterprise_name`, `period`, `amount`, `fingerprint`, `auditor`) VALUES
   (1, '0x40ef1f7cb724092abc8dc7d4b4e7db4b9523e2230047a7993fd2e4f773f09129', 'EM000001', '华东钢铁制造有限公司', '2024-01', 347.43, '0x1bc2c3c442cb267217a59f7291edd8d81fc421ebc5c660e03c1a07c4705da1be', '陈审核'),
   (1, '0x5639f7116ee47bc4ecf368c6dadcce0f2c5eec50aff98de8a3f2db92f73fb0d1', 'EM000002', '华东钢铁制造有限公司', '2024-02', 243.82, '0x6acfd7633aeec1270472db3d77fa8a054f23cc8a81583adc27b8c6fb6b3ea7ca', '刘监管'),

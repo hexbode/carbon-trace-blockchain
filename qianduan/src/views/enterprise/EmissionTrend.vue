@@ -2,6 +2,8 @@
   EmissionTrend.vue - 排放趋势统计页（企业端）
   用途：多维度分析企业碳排放数据变化趋势与排放源结构，支持按时间范围与排放源筛选，
   提供趋势折线图、占比饼图与对比柱状图
+  路由：/enterprise/trend（name: EmissionTrend，仅 enterprise 角色可访问）
+  依赖：排放记录接口（前端按报告期与排放源聚合）；三张图表由 ECharts 渲染
 -->
 <template>
   <div class="page-container">
@@ -11,7 +13,9 @@
       <p>多维度分析企业碳排放数据变化趋势与排放源结构</p>
     </div>
 
-    <!-- 筛选区：按时间范围（近6/12个月）与排放源过滤数据 -->
+    <!-- 筛选区：按时间范围（近6/12个月）与排放源过滤数据
+         时间范围决定月份轴长度（本页月份轴固定从 2024-01 起连续 N 个月，与演示数据期一致），
+         排放源按名称过滤，二者均在前端本地生效 -->
     <div class="panel mb-16">
       <div class="panel-body">
         <el-form :inline="true" :model="filters">
@@ -30,7 +34,8 @@
       </div>
     </div>
 
-    <!-- 汇总指标卡片区：排放总量、月均排放量、峰值月份、排放源数量 -->
+    <!-- 汇总指标卡片区：排放总量、月均排放量、峰值月份、排放源数量
+         口径：总量与峰值按当前筛选后的记录聚合；月均 = 总量 ÷ 月份轴长度（无数据月份按 0 计入） -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="6" v-for="s in summary" :key="s.label">
         <div class="stat-card">
@@ -40,7 +45,7 @@
       </el-col>
     </el-row>
 
-    <!-- 图表区：左侧月度排放量趋势折线图（含峰谷标记），右侧排放源结构占比饼图 -->
+    <!-- 图表区：左侧月度排放量趋势折线图（用 markPoint 标注峰值/谷值），右侧排放源结构占比环形饼图 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="16">
         <div class="panel">
@@ -83,21 +88,22 @@ const userStore = useUserStore()
 // 设备类型（手机端图表高度更紧凑）
 const { isMobile } = useDevice()
 
-// 筛选条件：时间范围（近 6/12 个月）与排放源
+// 筛选条件：range 时间范围（'6' / '12'，决定月份轴长度）、source 排放源名称（空表示全部）
 const filters = reactive({ range: '12', source: '' })
 
 // 当前企业的全部排放记录
 const myRecords = ref([])
 
-// 按筛选条件过滤后的记录
+// 按筛选条件过滤后的记录：仅按排放源名称过滤；
+// 时间范围不参与记录过滤，而是通过下方月份轴长度间接截断统计区间
 const records = computed(() => myRecords.value.filter(r =>
   !filters.source || r.sourceName === filters.source
 ))
 
-// 排放源下拉选项（去重）
+// 排放源下拉选项：取当前企业记录中出现的排放源名称并去重
 const sourceList = computed(() => [...new Set(myRecords.value.map(r => r.sourceName))])
 
-// 展示的月份列表：近 6 个月或近 12 个月
+// 展示的月份列表：2024 年 1 月起连续 6 或 12 个月（演示数据固定在 2024 年度）
 const months = computed(() => {
   const n = Number(filters.range)
   return Array.from({ length: n }, (_, i) => `2024-${String(i + 1).padStart(2, '0')}`)
@@ -105,7 +111,7 @@ const months = computed(() => {
 // 月份中文标签
 const monthLabels = computed(() => months.value.map(m => `${Number(m.slice(5))}月`))
 
-// 各月排放量：按报告期聚合
+// 各月排放量：以月份轴为准，按报告期聚合该月全部记录的排放量，无记录月份结果为 0
 const monthlyData = computed(() => months.value.map(m =>
   records.value.filter(r => r.period === m).reduce((s, r) => s + Number(r.amount || 0), 0)
 ))
@@ -116,7 +122,7 @@ const totalEmission = computed(() => records.value.reduce((s, r) => s + Number(r
 const avgEmission = computed(() => monthlyData.value.length
   ? Math.round(totalEmission.value / monthlyData.value.length)
   : 0)
-// 峰值月份（排放量最大的月份）
+// 峰值月份（排放量最大的月份；存在并列最大值时取月份轴上最先出现的月份）
 const peakMonth = computed(() => {
   const max = Math.max(...monthlyData.value)
   const idx = monthlyData.value.indexOf(max)
@@ -131,7 +137,7 @@ const summary = computed(() => [
   { label: '排放源数量', value: sourceList.value.length, unit: '个' }
 ])
 
-// 按排放源聚合排放量（用于饼图与对比柱状图）
+// 按排放源聚合排放量（同时用于饼图与对比柱状图，聚合结果四舍五入取整）
 const sourceStats = computed(() => {
   const map = {}
   records.value.forEach(r => { map[r.sourceName] = (map[r.sourceName] || 0) + Number(r.amount || 0) })

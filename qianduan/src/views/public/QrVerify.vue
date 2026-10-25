@@ -1,8 +1,10 @@
 <!--
   QrVerify.vue —— 二维码验证页（公共查询端，无需登录）
-  用途：输入认证证书上的电子防伪码，系统依据防伪码生成对应二维码，
-        模拟扫码后核验该证书的碳排放数据认证信息、电子防伪码与区块链存证状态。
-  说明：二维码内容即电子防伪码；公共端不再支持按认证编号解析。
+  用途：输入认证证书上的电子防伪码，系统依据防伪码生成真实二维码，
+        可用手机相机扫描或在本页扫码核验证书的认证信息、防伪码与链上存证状态。
+  路由：/public/qr（PublicLayout 子路由）；依赖 qrcode 生成、jsqr 解码。
+  说明：二维码内容为携带 fp 参数的核验链接，手机扫码后跳转查询页并自动查询；
+        公共端不再支持按认证编号解析。
 -->
 <template>
   <div class="public-page">
@@ -34,6 +36,7 @@
           <template #prefix><el-icon><Key /></el-icon></template>
         </el-input>
 
+        <!-- 示例防伪码：点击填充并立即验证，同时生成对应二维码 -->
         <div class="quick">
           <span class="q-label">示例防伪码：</span>
           <el-tag
@@ -59,6 +62,7 @@
             <el-button class="camera-stop" size="small" type="danger" plain @click="stopCamera">停止扫描</el-button>
           </div>
 
+          <!-- 扫码操作：摄像头实时扫码，或选择图片 / 调起相机拍照识别 -->
           <div class="scan-actions">
             <el-button type="primary" plain @click="cameraOn ? stopCamera() : startCamera()">
               <el-icon><Camera /></el-icon> {{ cameraOn ? '停止摄像头' : '打开摄像头扫码' }}
@@ -77,6 +81,7 @@
           </p>
         </div>
 
+        <!-- 提交验证：防伪码为空时禁用，结果展示在下方 -->
         <el-button type="primary" :disabled="!inputFp.trim()" style="width: 100%" @click="verify">
           <el-icon><FullScreen /></el-icon> 验证该防伪码
         </el-button>
@@ -166,8 +171,10 @@ async function generateQr(fp) {
   }
   try {
     qrDataUrl.value = await QRCode.toDataURL(buildQrPayload(fp), {
+      // 480px 输出保证近距离扫码与截图识别的清晰度
       width: 480,
       margin: 1,
+      // M 级纠错兼顾容错能力与码点密度，避免链接较长时二维码过于密集
       errorCorrectionLevel: 'M',
       color: { dark: '#071a16', light: '#ffffff' }
     })
@@ -267,9 +274,11 @@ function scanFrame() {
     const canvas = getDecodeCanvas()
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
+    // willReadFrequently 提示浏览器改用 CPU 后端画布，降低逐帧 getImageData 的回读开销
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    // attemptBoth 同时尝试正色与反色，兼容深底浅码的二维码
     const code = jsQR(image.data, image.width, image.height, { inversionAttempts: 'attemptBoth' })
     if (code?.data) {
       handleScan(code.data)
@@ -295,7 +304,9 @@ function onFileChange(event) {
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
     const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    // 图片识别同样兼容正/反色二维码
     const code = jsQR(image.data, image.width, image.height, { inversionAttempts: 'attemptBoth' })
+    // 解码完成即释放临时对象 URL，避免图片数据常驻内存
     URL.revokeObjectURL(objectUrl)
     if (code?.data) {
       handleScan(code.data)
@@ -546,6 +557,7 @@ function formatPeriod(p) {
 /* 操作区取消最小宽度限制，输入框与按钮占满整行，保证可点击提交 */
 .verify-box.is-mobile .qr-actions { min-width: 0; width: 100%; }
 
+/* 移动端断点 ≤767px：收紧标题与留白 */
 @media (max-width: 767px) {
   /* 标题与留白收紧，避免超大标题在窄屏溢出 */
   .hero { margin-bottom: 18px; }

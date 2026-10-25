@@ -5,6 +5,8 @@
     1. 展示企业提交的碳排放报告列表（待审核 / 全部报告两种视图）
     2. 通过审核弹窗对报告进行数据核验、查看凭证、填写审核意见
     3. 审核通过后数据上链存证，驳回则打回企业重报
+  路由：/auditor/pending（name: PendingReports，仅 auditor 角色可访问）
+  依赖：报告记录接口（列表 + 审核提交）；审核通过由后端写入链上存证并生成认证记录
 -->
 <template>
   <div class="page-container">
@@ -23,7 +25,8 @@
     <!-- 报告列表面板：通过 Tab 切换 "待审核" 与 "全部报告" -->
     <div class="panel">
       <el-tabs v-model="activeTab">
-        <!-- 待审核标签页：仅展示 status=pending 的报告（手机端卡片列表，桌面端表格） -->
+        <!-- 待审核标签页：在当前审核员可见的报告列表中过滤出 status=pending 的记录
+             （前端本地过滤，手机端卡片列表，桌面端表格） -->
         <el-tab-pane label="待审核" name="pending">
           <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 4px 12px 12px">
             <el-empty v-if="!pendingList.length" description="暂无待审核报告" :image-size="70" />
@@ -143,7 +146,8 @@
             </el-descriptions>
           </el-tab-pane>
 
-          <!-- 数据凭证查看：展示原始活动数据凭证、排放因子取值依据与链上电子防伪码 -->
+          <!-- 数据凭证查看：展示原始活动数据凭证、排放因子取值依据与链上电子防伪码
+               当前凭证文件名称为静态演示数据，未对接凭证上传/下载接口 -->
           <el-tab-pane label="数据凭证" name="evidence">
             <div class="evidence-box">
               <div class="ev-item">
@@ -172,7 +176,8 @@
             </div>
           </el-tab-pane>
 
-          <!-- 审核意见填写：审核结论、三项评分（数据真实性/核算合规性/因子合理性）及审核意见 -->
+          <!-- 审核意见填写：审核结论、三项评分（数据真实性/核算合规性/因子合理性）及审核意见
+               评分目前仅用于界面展示，审核接口只提交结果与意见文本 -->
           <el-tab-pane label="审核意见" name="opinion">
             <el-form :label-width="isMobile ? 'auto' : '100px'">
               <el-form-item label="审核结论">
@@ -197,7 +202,8 @@
           </el-tab-pane>
         </el-tabs>
       </div>
-      <!-- 弹窗底部操作按钮：取消、通过并上链、驳回 -->
+      <!-- 弹窗底部操作按钮：取消、通过并上链、驳回
+           「通过」提交 certified（后端上链存证并生成证书），「驳回」提交 rejected（企业可重新申请） -->
       <template #footer>
         <el-button @click="showAudit = false">取消</el-button>
         <el-button type="success" @click="submitAudit('pass')" :loading="submitting">通过并上链</el-button>
@@ -205,7 +211,7 @@
       </template>
     </el-dialog>
 
-    <!-- 数据凭证查看弹窗（列表页"凭证"按钮触发的简化版查看，手机端可滚动） -->
+    <!-- 数据凭证查看弹窗：列表页「凭证」按钮触发的简化版，仅展示防伪码与示例凭证文件（手机端可滚动） -->
     <el-dialog v-model="showEvidence" title="数据凭证查看" width="560px">
       <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
         <div class="ev-item">
@@ -221,7 +227,7 @@
       </div>
     </el-dialog>
 
-    <!-- 报告详情抽屉：在"全部报告"标签页点击"详情"时打开 -->
+    <!-- 报告详情抽屉：在「全部报告」标签页点击「详情」时打开，只读展示审核结果与意见 -->
     <el-drawer v-model="showDetail" title="报告详情" size="500px">
       <el-descriptions :column="1" border v-if="current">
         <el-descriptions-item label="报告编号">{{ current.id }}</el-descriptions-item>
@@ -250,7 +256,7 @@ import { useDevice } from '@/composables/useDevice'
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 报告记录原始列表
+// 报告记录原始列表（请求不传过滤参数，可见范围由后端按当前登录审核员/机构限定）
 const records = ref([])
 // 列表加载态
 const loading = ref(false)
@@ -301,7 +307,10 @@ function viewEvidence(row) { current.value = row; showEvidence.value = true }
 // 打开详情抽屉（"全部报告"标签页使用）
 function viewDetail(row) { current.value = row; showDetail.value = true }
 
-// 提交审核：校验意见后调用后端审核接口，成功后重新拉取列表
+// 提交审核：审核意见为必填（为空时提示并切到意见 Tab），通过/驳回共用同一接口
+// action='pass' → result=certified（后端上链存证并生成认证记录）
+// action='reject' → result=rejected（企业可再次发起认证申请）
+// 成功后关闭弹窗并重新拉取列表，使待审核/全部两个标签页同步更新
 async function submitAudit(action) {
   // 审核意见为空时提示并跳转到意见 Tab
   if (!opinion.value.trim()) {
@@ -335,6 +344,7 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式 ===== */
 /* 顶部角标外边距 */
 .badge { margin-right: 10px; }
 /* 凭证项容器：每项之间留出间距 */
@@ -349,6 +359,7 @@ useAutoRefresh(load)
   padding: 6px 12px; background: #f1f5f9; border-radius: 6px;
   font-size: 13px; color: #475569;
 }
+/* ===== 移动端（≤767px）适配 ===== */
 /* 手机端弹窗内容区：限制最大高度并允许滚动，保证底部按钮始终可达 */
 .dlg-scroll {
   max-height: 58vh;

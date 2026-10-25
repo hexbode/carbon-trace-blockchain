@@ -25,11 +25,25 @@ public class BlockchainServiceImpl implements BlockchainService {
     private final ChainGateway chainGateway;
     private final ChainProperties properties;
 
+    /**
+     * 构造器注入依赖，由 Spring 容器创建，业务代码不应手工实例化。
+     *
+     * @param chainGateway 链网关，当前 mode 对应的唯一实现（真实链或离线桩），本类只读不写
+     * @param properties   链配置，用于取区块/交易列表的默认上限
+     */
     public BlockchainServiceImpl(ChainGateway chainGateway, ChainProperties properties) {
         this.chainGateway = chainGateway;
         this.properties = properties;
     }
 
+    /**
+     * 查询最近若干个区块及其交易明细（只读，不写链、不落库）。
+     * 字段按前端展示顺序写入 LinkedHashMap；区块无交易时返回空数组。
+     * 本方法不捕获链异常：链不可达时异常向上传播，由调用方/全局异常处理返回错误。
+     *
+     * @param limit 区块数量上限，&lt;=0 时取配置中的默认值
+     * @return 区块列表 [{index, hash, previousHash, timestamp, merkleRoot, nonce, miner, transactions}]
+     */
     @Override
     public List<Map<String, Object>> listBlocks(int limit) {
         int size = limit <= 0 ? properties.getBlockListLimit() : limit;
@@ -45,6 +59,7 @@ public class BlockchainServiceImpl implements BlockchainService {
             item.put("miner", block.getMiner());
 
             List<Map<String, Object>> txList = new ArrayList<>();
+            // 区块视图可能不带交易明细（链网关按需裁剪），此处判空保证接口结构稳定
             if (block.getTransactions() != null) {
                 for (ChainTxView tx : block.getTransactions()) {
                     Map<String, Object> txItem = new LinkedHashMap<>();
@@ -64,6 +79,12 @@ public class BlockchainServiceImpl implements BlockchainService {
         return result;
     }
 
+    /**
+     * 链统计：区块数、存证总数及有效/已撤销/已作废数量，附带运行模式与链可用性。
+     * 数据来自 {@link #collect()}：链不可达时计数类指标降级为 0，模式与可用性仍如实返回。
+     *
+     * @return {blockCount, txCount, activeCount, revokedCount, invalidCount, mode, chainAvailable}
+     */
     @Override
     public Map<String, Object> stats() {
         ChainStats stats = collect();
@@ -78,6 +99,13 @@ public class BlockchainServiceImpl implements BlockchainService {
         return result;
     }
 
+    /**
+     * 链健康信息：运行模式、可用性、群组与合约地址、签名方式，以及最新区块高度与节点交易总数。
+     * 始终返回 200：链查询异常不会向上抛出，而是把 latestBlockNumber / chainTxCount 置为 null，
+     * 并在 notice 中透出异常信息，避免健康检查因链故障整体失败。
+     *
+     * @return 健康信息 Map，链异常时额外含 notice
+     */
     @Override
     public Map<String, Object> health() {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -86,6 +114,7 @@ public class BlockchainServiceImpl implements BlockchainService {
         result.put("groupId", properties.getWebase().getGroupId());
         result.put("registryAddress", properties.getContracts().getRegistry().getAddress());
         result.put("complianceAddress", properties.getContracts().getCompliance().getAddress());
+        // 配置了 signUserId 时由 WeBASE 托管私钥签名，否则使用用户地址直接签名
         result.put("signMode", properties.getWebase().getSignUserId() == null
                 || properties.getWebase().getSignUserId().isBlank() ? "user-address" : "sign-user-id");
         try {
@@ -107,6 +136,7 @@ public class BlockchainServiceImpl implements BlockchainService {
         stats.setChainAvailable(chainGateway.available());
         try {
             long latest = chainGateway.latestBlockNumber();
+            // 区块高度从 0 开始，块数 = 最高高度 + 1；返回 -1 表示空链
             stats.setBlockCount(latest < 0 ? 0 : latest + 1);
         } catch (RuntimeException e) {
             stats.setBlockCount(0);
@@ -118,6 +148,7 @@ public class BlockchainServiceImpl implements BlockchainService {
             stats.setRevokedCount(count.getRevoked());
             stats.setInvalidCount(count.getInvalid());
         } catch (RuntimeException e) {
+            // 计数失败仅把总数为 0，active/revoked/invalid 保持 ChainStats 的默认 0
             stats.setTxCount(0);
         }
         return stats;

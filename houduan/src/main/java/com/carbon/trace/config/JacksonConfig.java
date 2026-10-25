@@ -16,6 +16,9 @@ import java.time.format.DateTimeFormatter;
  * 问题：LocalDateTime 默认按 ISO-8601 输出（如 2024-10-15T03:00:09），
  *      前端表格直接展示时会多出一个 "T"，与库里的 2024-10-15 03:00:09 不一致。
  * 处理：统一按 "yyyy-MM-dd HH:mm:ss" 序列化/反序列化（LocalDate 仍是 yyyy-MM-dd，不受影响）。
+ *
+ * 影响范围：全局 ObjectMapper，所有接口的 LocalDateTime 出入参都受此约束；
+ * 前端提交时间字段必须使用同一格式，否则会在反序列化阶段被 GlobalExceptionHandler 按 400 处理。
  */
 @Configuration
 public class JacksonConfig {
@@ -27,6 +30,8 @@ public class JacksonConfig {
     /**
      * 注册 LocalDateTime 的全局序列化/反序列化器，统一为 yyyy-MM-dd HH:mm:ss，
      * 影响所有 JSON 输出与请求体反序列化中的 LocalDateTime 字段。
+     *
+     * @return 由 Spring Boot 在构建 ObjectMapper 时回调的定制器
      */
     @Bean
     public Jackson2ObjectMapperBuilderCustomizer dateTimeCustomizer() {

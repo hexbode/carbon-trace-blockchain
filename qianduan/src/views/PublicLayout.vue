@@ -1,6 +1,7 @@
 <!--
   PublicLayout.vue —— 公共查询端布局
   用途：面向社会公众的公开查询页面框架，无需登录即可访问。
+  路由：/public 的父布局，默认重定向 /public/query，子页面共 4 个。
   包含顶部品牌导航栏、中间路由出口内容区、底部页脚信息说明。
 -->
 <template>
@@ -8,8 +9,9 @@
     <!-- 顶部公共头部：品牌 logo + 导航 + 登录入口 -->
     <header class="public-header">
       <div class="public-container header-inner">
-        <!-- 品牌区：点击返回认证编号查询首页 -->
+        <!-- 品牌区：点击返回电子防伪码查询首页 -->
         <div class="brand" @click="$router.push('/public/query')">
+          <!-- 品牌图标：链形符号，移动端改为青柠渐变底色 -->
           <div class="logo"><el-icon :size="22"><Connection /></el-icon></div>
           <div>
             <div class="brand-name">碳链通</div>
@@ -93,6 +95,7 @@ const navItems = [
   z-index: 10;
   box-shadow: 0 2px 12px rgba(0,0,0,.1);
 }
+/* 头部内容行：固定 64px 高，品牌/导航/操作区两端分布 */
 .header-inner {
   height: 64px;
   display: flex;
@@ -106,6 +109,7 @@ const navItems = [
   gap: 12px;
   cursor: pointer;
 }
+/* 品牌图标：绿蓝渐变圆角方块 */
 .brand .logo {
   width: 40px;
   height: 40px;
@@ -115,6 +119,7 @@ const navItems = [
   align-items: center;
   justify-content: center;
 }
+/* 系统名与端别副标题 */
 .brand-name {
   font-size: 18px;
   font-weight: 700;
@@ -128,6 +133,7 @@ const navItems = [
   display: flex;
   gap: 4px;
 }
+/* 单个导航项：悬停浅色底，激活态为绿色系 */
 .nav-item {
   display: flex;
   align-items: center;
@@ -153,6 +159,7 @@ const navItems = [
   align-items: center;
   gap: 16px;
 }
+/* “链上数据”标识：文字前的绿色状态点 */
 .header-right .el-tag {
   display: flex;
   align-items: center;
@@ -177,10 +184,12 @@ const navItems = [
   padding: 24px 0;
   font-size: 13px;
 }
+/* 页脚说明文字：主标题与次要提示两行 */
 .public-footer p { margin: 4px 0; }
 .muted { color: #475569; font-size: 12px; }
 
 /* ============ 移动端：墨绿凭证头部 + 胶囊导航 ============ */
+/* 移动端断点 ≤767px（与 useDevice 的移动端判定一致） */
 @media (max-width: 767px) {
   .public-layout {
     background: var(--m-paper, #f3f6f2);

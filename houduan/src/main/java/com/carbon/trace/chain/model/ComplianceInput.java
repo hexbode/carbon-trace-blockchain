@@ -9,10 +9,16 @@ import java.math.BigDecimal;
  *
  * 输入边界说明：链上无法自行聚合业务库数据，因此「本期/上期合计、年累计、活动数据、因子」
  * 由后端从数据库聚合后传入，合约只负责按规则判定。
+ *
+ * 字段口径：
+ *  - 金额字段为十进制原值，网关按 ×100 定标后上链；
+ *  - 日期字段使用整数 YYYYMM（不是 YYYY-MM），非法月份由合约的迟报规则自行处理；
+ *  - {@code previousTotal} 无上期时传 0（不是 null），否则环比规则的分母会退化为 0 而被跳过。
  */
 @Data
 public class ComplianceInput {
 
+    /** 企业编号（链上按企业维度维护配额、年累计与因子） */
     private String enterpriseId;
 
     /** 报告期所在年份 */

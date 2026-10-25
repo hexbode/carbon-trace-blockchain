@@ -81,7 +81,13 @@ public class AlertServiceImpl implements AlertService {
         this.complianceService = complianceService;
     }
 
-    /** 按级别、状态过滤查询告警，按触发时间倒序 */
+    /**
+     * 按级别、状态过滤查询告警，按触发时间倒序；参数为空表示该条件不限制。
+     *
+     * @param level  告警级别（high / medium / low），空则不筛选
+     * @param status 处理状态（pending / resolved），空则不筛选
+     * @return 告警列表
+     */
     @Override
     public List<Alert> list(String level, String status) {
         LambdaQueryWrapper<Alert> wrapper = new LambdaQueryWrapper<>();
@@ -95,7 +101,13 @@ public class AlertServiceImpl implements AlertService {
         return alertMapper.selectList(wrapper);
     }
 
-    /** 按编号查询告警，不存在抛 404 */
+    /**
+     * 按编号查询告警详情。
+     *
+     * @param id 告警编号（ALT 开头）
+     * @return 告警记录
+     * @throws ApiException 404：告警不存在
+     */
     @Override
     public Alert getById(String id) {
         Alert alert = alertMapper.selectById(id);
@@ -105,7 +117,13 @@ public class AlertServiceImpl implements AlertService {
         return alert;
     }
 
-    /** 处理告警：状态置为 resolved */
+    /**
+     * 处理告警：只把状态置为 resolved 并落库，保留级别、文案与触发时间作为处理留痕。
+     *
+     * @param id 告警编号
+     * @return 更新后的告警
+     * @throws ApiException 404：告警不存在
+     */
     @Override
     public Alert resolve(String id) {
         Alert alert = getById(id);
@@ -114,6 +132,14 @@ public class AlertServiceImpl implements AlertService {
         return alert;
     }
 
+    /**
+     * 写入时判定：新增排放记录入库后调用，按合规规则生成待处理告警。
+     * 判定优先交给链上合约（checkAll），返回的位掩码逐位映射为告警类型与级别；
+     * 链上判定不可用时回退本地规则，保证填报主流程不因链故障中断。
+     * 由于按「已入库」的合计判定，调用方必须在 insert 之后执行。
+     *
+     * @param record 已入库的排放记录（其排放量已计入本期/年度合计）
+     */
     @Override
     public void evaluateOnEmissionCreate(EmissionRecord record) {
         ComplianceResult result = complianceService.evaluateForRecord(record);
@@ -132,6 +158,13 @@ public class AlertServiceImpl implements AlertService {
         checkLateReport(record);
     }
 
+    /**
+     * 删除排放记录时清理该企业该报告期下的全部告警（不限类型与级别），避免残留失效告警。
+     * 任一参数为空立即返回：条件缺失时若继续删除会退化为按单条件甚至全表删除。
+     *
+     * @param enterpriseId 企业编号
+     * @param period       报告期（yyyy-MM）
+     */
     @Override
     public void removeByEnterpriseAndPeriod(String enterpriseId, String period) {
         if (!StringUtils.hasText(enterpriseId) || !StringUtils.hasText(period)) {
@@ -142,6 +175,15 @@ public class AlertServiceImpl implements AlertService {
                 .eq(Alert::getPeriod, period));
     }
 
+    /**
+     * 记录链上同步最终失败告警（type=chain_failed，level=high），纳入监管端待处理告警流。
+     * 缺少企业或报告期时不满足告警表的列约束，只记错误日志、不落库。
+     *
+     * @param enterpriseId   企业编号，为空则不落库
+     * @param enterpriseName 企业名称，可为空
+     * @param period         报告期，为空则不落库
+     * @param message        失败原因（含上链动作描述）
+     */
     @Override
     public void reportChainFailure(String enterpriseId, String enterpriseName, String period, String message) {
         if (!StringUtils.hasText(enterpriseId) || !StringUtils.hasText(period)) {
@@ -191,6 +233,7 @@ public class AlertServiceImpl implements AlertService {
         if (previousPeriod == null) {
             return;
         }
+        // 当前记录已入库，本期合计包含自身；上一报告期没有有效排放时无法计算环比，跳过
         BigDecimal previousTotal = sumAmount(record.getEnterpriseId(), previousPeriod);
         if (previousTotal.compareTo(BigDecimal.ZERO) <= 0) {
             return;
@@ -232,6 +275,7 @@ public class AlertServiceImpl implements AlertService {
         if (history.isEmpty()) {
             return;
         }
+        // 以最近一次同企业同排放源的填报因子为基准（按创建时间倒序的第一条）
         BigDecimal previousFactor = history.get(0).getEmissionFactor();
         if (previousFactor == null || previousFactor.compareTo(record.getEmissionFactor()) == 0) {
             return;
@@ -250,6 +294,7 @@ public class AlertServiceImpl implements AlertService {
         try {
             periodMonth = YearMonth.parse(record.getPeriod());
         } catch (DateTimeParseException e) {
+            // 报告期格式非法视为脏数据，跳过迟报判定，避免误报告警
             return;
         }
         if (!periodMonth.isBefore(YearMonth.now().minusMonths(LATE_REPORT_MONTHS))) {
@@ -337,6 +382,15 @@ public class AlertServiceImpl implements AlertService {
         return history.isEmpty() ? null : history.get(0).getPeriod();
     }
 
+    /**
+     * 从报告期（{@code YYYY-MM} 或 {@code YYYYMM}）中截取前 4 位解析年份，仅供告警文案展示使用。
+     *
+     * 解析失败（period 为 null、长度不足 4 位、或前 4 位不是数字）时不抛异常，而是回退为系统当前年份，
+     * 保证文案生成始终可用；该结果不参与合规判定。
+     *
+     * @param period 报告期字符串，可为 null
+     * @return 年份；无法解析时返回当前年份
+     */
     private static int yearOf(String period) {
         if (period != null && period.length() >= 4) {
             try {

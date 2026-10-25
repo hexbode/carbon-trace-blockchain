@@ -5,6 +5,8 @@
     1. 汇总今日完成的审核工作量：已审核总数、通过数、驳回数
     2. 列出今日已审核的报告记录，支持按审核结果与关键词筛选
     3. 点击详情通过抽屉查看单条记录的完整审核信息
+  路由：/auditor/today（name: TodayAudit，仅 auditor 角色可访问）
+  依赖：今日审核列表与今日汇总统计接口、报告详情接口
 -->
 <template>
   <div class="page-container">
@@ -14,7 +16,8 @@
       <p>查看今日已完成的审核记录、审核结果分布与审核意见</p>
     </div>
 
-    <!-- 统计卡片区：今日已审核 / 通过 / 驳回，点击卡片筛选下方列表 -->
+    <!-- 统计卡片区：今日已审核 / 通过 / 驳回，点击卡片筛选下方列表
+         数值来自今日汇总接口（total / passed / rejected），不受下方筛选条件影响 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="8" v-for="s in stats" :key="s.label">
         <div
@@ -29,7 +32,7 @@
     </el-row>
 
     <div class="panel">
-      <!-- 筛选区：审核结果 + 关键词 -->
+      <!-- 筛选区：审核结果（certified / rejected）+ 关键词（企业名称或报告编号，前端本地包含匹配） -->
       <div class="panel-body" style="padding: 16px 20px 0">
         <el-form :inline="true" :model="filters">
           <el-form-item label="审核结果">
@@ -43,7 +46,8 @@
           </el-form-item>
         </el-form>
       </div>
-      <!-- 今日审核记录列表：手机端卡片列表，桌面端表格 -->
+      <!-- 今日审核记录列表：手机端卡片列表，桌面端表格
+           列表均为当日记录，审核时间只截取时分秒（auditedAt.slice(11)） -->
       <div style="padding: 0 20px 20px">
         <div v-if="isMobile" v-loading="loading" class="m-list">
           <el-empty v-if="!filtered.length" description="暂无今日审核记录" :image-size="70" />
@@ -96,7 +100,7 @@
       </div>
     </div>
 
-    <!-- 审核记录详情弹框：居中显示（手机端内容区可滚动） -->
+    <!-- 审核记录详情弹框：补全防伪码、提交人、审核意见等字段后居中展示（手机端内容区可滚动） -->
     <el-dialog v-model="showDetail" title="审核记录详情" width="620px">
       <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
         <el-descriptions :column="1" border>
@@ -139,9 +143,9 @@ import { useDevice } from '@/composables/useDevice'
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 今日已审核列表
+// 今日已审核列表（含企业、报告期、排放源、审核人与审核时间，不含防伪码/审核意见）
 const todayList = ref([])
-// 今日审核汇总（总数 / 通过 / 驳回）
+// 今日审核汇总（total 已审核总数 / passed 通过数 / rejected 驳回数）
 const summary = ref({ total: 0, passed: 0, rejected: 0 })
 // 列表加载态
 const loading = ref(false)
@@ -151,7 +155,7 @@ const filters = reactive({ result: '', keyword: '' })
 
 // 最终展示列表：在今日记录基础上应用筛选条件
 // - result 为空时展示全部结果
-// - keyword 匹配企业名称或报告编号
+// - keyword 按包含关系匹配企业名称或报告编号（区分大小写，未做 trim / 小写归一）
 const filtered = computed(() => todayList.value.filter(r =>
   (!filters.result || r.status === filters.result) &&
   (!filters.keyword || r.enterpriseName.includes(filters.keyword) || r.id.includes(filters.keyword))
@@ -172,7 +176,7 @@ function selectResult(status) {
 // 详情弹框显隐控制与当前查看的记录
 const showDetail = ref(false)
 const current = ref(null)
-// 打开详情弹框：拉取完整报告详情（今日列表接口不含防伪码/审核意见等字段）
+// 打开详情弹框：拉取完整报告详情（今日列表接口不含防伪码/审核意见等字段），失败时回退为列表行数据
 async function view(row) {
   try {
     current.value = await getReportRecord(row.id)
@@ -182,7 +186,7 @@ async function view(row) {
   showDetail.value = true
 }
 
-// 拉取今日审核数据
+// 拉取今日审核数据：列表与汇总两个接口并发请求
 async function load() {
   loading.value = true
   try {
@@ -199,6 +203,7 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式 ===== */
 /* 统计卡片数值颜色变体：通过绿色、驳回红色 */
 .stat-card.success .value { color: #10b981; }
 .stat-card.danger .value { color: #ef4444; }
@@ -209,6 +214,7 @@ useAutoRefresh(load)
   border-color: var(--primary);
   background: #f0fdf9;
 }
+/* ===== 移动端（≤767px）适配 ===== */
 /* 手机端弹窗内容区：限制最大高度并允许滚动，保证底部按钮始终可达 */
 .dlg-scroll {
   max-height: 62vh;

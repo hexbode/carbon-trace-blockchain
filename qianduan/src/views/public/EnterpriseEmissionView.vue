@@ -2,6 +2,7 @@
   EnterpriseEmissionView.vue —— 企业碳排放信息页（公共查询端，无需登录）
   用途：社会公众按企业名称搜索纳入监管的企业，查看其累计排放、认证记录与待审核情况，
   并可打开抽屉查看企业详情及认证记录明细。
+  路由：/public/enterprise（PublicLayout 子路由）。
 -->
 <template>
   <div class="public-page">
@@ -94,6 +95,7 @@
             <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight: 600">{{ row.amount }} tCO₂</span></div>
           </div>
         </div>
+        <!-- 桌面端：表格展示认证记录，排放量右对齐便于横向比较 -->
         <el-table v-else :data="detail.certList" size="small">
           <el-table-column prop="id" label="认证编号" min-width="120" />
           <el-table-column prop="period" label="报告日期" min-width="100" />
@@ -142,6 +144,7 @@ const list = computed(() =>
       name: e.name,
       industry: e.industry,
       scope: e.scope,
+      // 累计排放取整展示，避免小数位让卡片数字过长
       total: Math.round(Number(em.totalEmission || 0)),
       certCount: em.certCount || 0,
       // 待审核数量由公共接口的 pendingCount 提供
@@ -159,6 +162,7 @@ const filtered = computed(() =>
 async function selectEnterprise(ent) {
   const entBase = enterprises.value.find(e => e.id === ent.id) || {}
   let certList = []
+  // 认证明细接口需要登录态：公共端未登录时跳过请求，直接展示基础信息
   if (localStorage.getItem('carbon_token')) {
     try {
       certList = await getCertifications({ enterpriseId: ent.id })
@@ -174,6 +178,7 @@ async function selectEnterprise(ent) {
 onMounted(async () => {
   loading.value = true
   try {
+    // 企业基础信息与排放概览互不依赖，并行请求减少等待
     const [ents, ems] = await Promise.all([getPublicEnterprises(), getPublicEnterpriseEmissions()])
     enterprises.value = ents || []
     emissions.value = ems || []
@@ -194,10 +199,13 @@ onMounted(async () => {
 .search-box { padding: 20px; margin-bottom: 20px; }
 /* 企业卡片网格布局 */
 .enterprise-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+/* 单张企业卡片：可点击进入详情，悬停轻微上浮 */
 .ent-card { padding: 20px; cursor: pointer; transition: all .2s; }
 .ent-card:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,.08); }
+/* 卡片头部：企业图标 + 名称/行业 + 认证数量标签 */
 .ent-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .ent-icon { width: 44px; height: 44px; border-radius: 10px; background: #ecfdf5; color: #10b981; display: flex; align-items: center; justify-content: center; }
+/* 企业文案占满剩余宽度，过长的名称在内部截断 */
 .ent-info { flex: 1; min-width: 0; }
 .ent-info h3 { margin: 0; font-size: 16px; color: #0f172a; }
 .ent-info p { margin: 2px 0 0; font-size: 12px; color: #94a3b8; }
@@ -218,6 +226,7 @@ onMounted(async () => {
 .mini-stat.orange .v { color: #f59e0b; }
 .mini-stat .l { font-size: 12px; color: #94a3b8; margin-top: 4px; }
 
+/* 移动端断点 ≤767px：卡片改为单列，长文本允许换行 */
 @media (max-width: 767px) {
   /* 标题与留白收紧，避免超大标题在窄屏溢出 */
   .hero { margin-bottom: 18px; }

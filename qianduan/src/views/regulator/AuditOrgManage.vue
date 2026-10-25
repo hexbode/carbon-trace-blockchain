@@ -4,6 +4,11 @@
   功能描述：管理碳排放认证审核机构的资质证书、业务范围、
            联系人与状态等信息。支持新增机构、编辑机构信息、启用/停用机构，
            确保审核机构资质合规、业务范围明确，便于监管端统一调度与监督。
+  路由：/regulator/audit-org（name: AuditOrgManage，roles: regulator / admin）
+  依赖接口：@/api/auditOrg 的 getAuditOrganizations、createAuditOrganization、
+           updateAuditOrganization（编辑与启用/停用共用同一更新接口）
+  说明：列表一次拉取全量数据，本页无筛选与分页；状态字段 status 取 active（正常）/ inactive（停用），
+       页面只提供启用/停用，不提供删除入口。
 -->
 <template>
   <div class="page-container">
@@ -17,6 +22,7 @@
     </div>
 
     <!-- 机构列表表格：展示机构编号、名称、资质、业务范围、联系人、电话、入驻时间、状态及操作 -->
+    <!-- 状态字段：status === 'active' 展示“正常”（绿色），其余视为“停用”（灰色）；操作列按钮文案与颜色随状态互换 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
         <!-- 手机端卡片列表 -->
@@ -42,6 +48,7 @@
           </div>
         </div>
 
+        <!-- 桌面端表格（>767px）：列顺序为编号、名称、资质、业务范围、联系人、电话、入驻时间、状态、操作 -->
         <el-table v-else :data="list" stripe v-loading="loading">
           <el-table-column prop="id" label="机构编号" min-width="110" align="center" />
           <el-table-column prop="name" label="机构名称" min-width="190" show-overflow-tooltip align="center" />
@@ -66,6 +73,7 @@
     </div>
 
     <!-- 新增/编辑机构对话框：根据 form.id 是否存在切换标题 -->
+    <!-- 表单字段与审核机构实体对应；业务范围按行业列举，用顿号或逗号分隔，便于检索 -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑审核机构' : '新增审核机构'" width="560px">
       <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
         <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
@@ -77,6 +85,7 @@
         </el-form>
       </div>
       <template #footer>
+        <!-- 保存：先做必填校验，再按 form.id 分派新增或更新 -->
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submit" :loading="submitting">保存</el-button>
       </template>
@@ -110,8 +119,10 @@ const formRef = ref()
 // 提交按钮加载态
 const submitting = ref(false)
 // 表单响应式状态：id 为空表示新增
+// 打开编辑时 Object.assign 会把 status 等非表单字段一并复制进来，提交 {...form} 回传，保存不会丢失启停用状态
 const form = reactive({ id: '', name: '', qualification: '', scope: '', contact: '', phone: '' })
 // 表单校验规则：必填字段
+// scope（业务范围）非必填；phone 仅校验非空，不校验号码格式
 const rules = {
   name: [{ required: true, message: '请输入机构名称', trigger: 'blur' }],
   qualification: [{ required: true, message: '请输入资质证书号', trigger: 'blur' }],
@@ -119,7 +130,7 @@ const rules = {
   phone: [{ required: true, message: '请输入联系电话', trigger: 'blur' }]
 }
 
-// 拉取机构列表
+// 拉取机构列表（接口一次返回全量，前端不分页）
 async function load() {
   loading.value = true
   try {
@@ -155,6 +166,7 @@ async function submit() {
   }
 }
 // 切换机构启用/停用状态（调用更新接口后刷新列表）
+// 状态映射：正常 → inactive（停用），停用 → active（重新启用）；无二次确认
 async function toggle(row) {
   const status = row.status === 'active' ? 'inactive' : 'active'
   await updateAuditOrganization(row.id, { ...row, status })

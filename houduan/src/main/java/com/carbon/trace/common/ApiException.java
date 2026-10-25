@@ -11,6 +11,14 @@ import org.springframework.http.HttpStatus;
  *   {@code ApiException(HttpStatus, String)} 指定 HTTP 状态码 + 错误文案构造；
  *   {@code ApiException(String)} 便捷构造，默认按 400 返回；
  *   {@code getStatus()} 返回对应 HTTP 状态码，供全局异常处理器读取。
+ *
+ * 常用状态码约定（全局统一）：
+ *   400 参数缺失/格式非法/业务前置校验失败（默认值）；
+ *   401 未登录或令牌失效；
+ *   403 角色不足或企业归属不符；
+ *   404 业务对象不存在；
+ *   409 链上状态冲突（如防伪码重复、证书已撤销）；
+ *   502/503 链层调用失败或 WeBASE-Front 不可达（由链层映射后以本异常抛出）。
  */
 public class ApiException extends RuntimeException {
 

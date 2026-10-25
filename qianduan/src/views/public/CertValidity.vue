@@ -2,6 +2,7 @@
   CertValidity.vue —— 认证有效性验证页（公共查询端，无需登录）
   用途：社会公众输入认证电子防伪码或交易哈希，通过区块链哈希比对校验证书的有效性与完整性，
   并识别证书是否已被撤销。
+  路由：/public/validity（PublicLayout 子路由）。
 -->
 <template>
   <div class="public-page">
@@ -15,6 +16,7 @@
     <div class="verify-box panel">
       <div class="verify-input">
         <el-input v-model="inputHash" type="textarea" :rows="3" placeholder="请输入认证电子防伪码或交易哈希进行验证" />
+        <!-- 验证按钮：防伪码与交易哈希共用同一校验入口，移动端占满整行 -->
         <el-button type="primary" size="large" style="margin-top: 12px" :style="isMobile ? { width: '100%' } : null" @click="verify">
           <el-icon><Key /></el-icon> 区块链验证
         </el-button>
@@ -110,13 +112,15 @@ const compliance = ref(null)  // 链上合规判定快照
 async function verify() {
   const hash = inputHash.value.trim()
   if (!hash) return
+  // 每次验证前先清空上一次的合规判定，避免旧结果与新证书错配
   compliance.value = null
   try {
     result.value = await verifyCertification({ hash })
   } catch (e) {
+    // 错误提示由请求拦截器统一处理，这里维持"无结果"状态
     result.value = null
   }
-  // 验证通过后补充读取该证书的链上合规判定快照
+  // 验证通过后补充读取该证书的链上合规判定快照（需先拿到指纹）
   const fingerprint = result.value?.valid ? result.value?.cert?.fingerprint : null
   if (fingerprint) {
     try {
@@ -197,6 +201,7 @@ onMounted(async () => {
 /* 结果详情中的电子防伪码、交易哈希等长文本允许换行 */
 .result-detail :deep(.el-descriptions__content) { word-break: break-all; }
 
+/* 移动端断点 ≤767px：面板与文本整体收紧 */
 @media (max-width: 767px) {
   /* 标题与留白收紧，避免超大标题在窄屏溢出 */
   .hero { margin-bottom: 18px; }

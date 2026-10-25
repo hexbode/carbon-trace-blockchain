@@ -17,12 +17,21 @@ import java.io.IOException;
  * 判定语义：请求头缺失、不是 Bearer 格式或令牌解析失败，一律返回 401 JSON 并中断请求
  * （preHandle 返回 false）。
  * 注册范围见 WebMvcConfig：拦截 /api/**，放行登录、公共查询端与公众免登录的认证校验接口。
+ *
+ * 依赖：{@link JwtUtil}（签名与有效期校验的唯一入口）。
+ * 安全边界：
+ *   1. 本类只解决“身份是否可信”，不做角色与企业归属判断；角色校验在各 Controller，数据隔离在 UserScopes；
+ *   2. 令牌缺失、非 Bearer 前缀、签名错误、已过期等所有失败情形一律返回同一个 401 文案，
+ *      不区分原因，避免为令牌探测提供额外信息；
+ *   3. 401 响应由本类直接写出，不经过 GlobalExceptionHandler（拦截器阶段尚未进入异常处理链）；
+ *   4. 拦截范围仅 /api/**，非该前缀的路径（如静态资源 /uploads/**）不经过本类。
  */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
 
     private final JwtUtil jwtUtil;
 
+    /** 构造注入 JWT 工具；拦截器本身无状态，可作为单例被所有请求线程共享 */
     public AuthInterceptor(JwtUtil jwtUtil) {
         this.jwtUtil = jwtUtil;
     }
@@ -30,14 +39,21 @@ public class AuthInterceptor implements HandlerInterceptor {
     /**
      * 请求前置处理：校验并解析令牌，成功则把用户信息写入 UserContext 并返回 true。
      * 返回 false 表示请求被拦截（已写 401 响应），Spring MVC 不再调用后续处理器。
+     *
+     * @param request  当前请求，从 Authorization 头取令牌
+     * @param response 当前响应，鉴权失败时直接写入 401 JSON
+     * @param handler  将被调用的处理器（本类不关心）
+     * @return true 表示放行；false 表示已拦截并结束请求
      */
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String header = request.getHeader("Authorization");
+        // 必须严格匹配 "Bearer " 前缀；不接受 query 参数或 Cookie 中的令牌
         if (header == null || !header.startsWith("Bearer ")) {
             writeUnauthorized(response);
             return false;
         }
+        // 去掉 "Bearer " 前缀（7 个字符）后再解析，避免把空格带进令牌
         String token = header.substring(7).trim();
         try {
             Claims claims = jwtUtil.parse(token);

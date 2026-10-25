@@ -5,6 +5,17 @@
            包括监管企业数量、累计碳排放量、已认证记录数、待处理告警数；
            同时提供行业碳排放对比柱状图、认证状态分布饼图，以及最新异常告警列表，
            帮助监管人员快速掌握整体监管态势。
+  路由：/regulator/home（name: RegulatorHome，roles: regulator / admin）
+  依赖接口：@/api/stats 的 getRegulatorOverview（顶部四项指标）、
+           getRegulatorIndustryEmission（行业碳排放柱状图）、getRegulatorCertStatus（认证状态饼图）；
+           @/api/alert 的 getAlerts（固定传 status=pending，首页只取最新 5 条）
+  依赖模块：@/composables/useECharts（图表实例与自动重绘）、useDevice（移动端适配）、
+           useAutoRefresh（布局层定时信号触发重新拉取）
+  统计口径：
+    监管企业数 = 已入驻企业总数；
+    累计碳排放 = 各企业排放记录按 tCO₂ 汇总；
+    已认证记录 = 认证通过的记录条数；
+    待处理告警 = alerts 中 status = pending 的条数。
 -->
 <template>
   <div class="page-container">
@@ -28,6 +39,7 @@
     </el-row>
 
     <!-- 图表区域：行业碳排放对比柱状图 + 认证状态分布饼图 -->
+    <!-- 布局：左侧柱状图占 14 栅格，右侧饼图占 10 栅格；移动端仅把图表高度压到 240px，不改变分栏 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="14">
         <div class="panel">
@@ -63,6 +75,7 @@
             <div class="m-row"><span class="m-key">时间</span><span class="m-val">{{ row.createdAt }}</span></div>
           </div>
         </div>
+        <!-- 桌面端表格（>767px）：字段为级别、企业名称、告警内容、触发时间，与移动端卡片信息一致 -->
         <el-table v-else :data="topAlerts" size="default">
           <el-table-column label="级别" min-width="80" align="center">
             <template #default="{ row }"><el-tag :type="row.level === 'high' ? 'danger' : row.level === 'medium' ? 'warning' : 'info'" size="small" effect="dark">{{ levelLabel(row.level) }}</el-tag></template>
@@ -93,20 +106,21 @@ import { useDevice } from '@/composables/useDevice'
 const { isMobile } = useDevice()
 // 告警列表加载态（手机端卡片列表显示 loading 遮罩）
 const loading = ref(false)
-// 监管概览统计
+// 监管概览统计（接口 /stats/regulator/overview 的返回，缺字段时由 stats 计算属性兜底为 0）
 const overview = ref({ enterpriseCount: 0, totalEmission: 0, certCount: 0, pendingAlerts: 0 })
-// 行业碳排放对比：行业名称与对应数值
+// 行业碳排放对比：行业名称与对应数值（两数组按索引一一对应，来自同一接口的 industry / amount）
 const industries = ref([])
 const industryValues = ref([])
-// 认证状态统计：已认证 / 待审核 / 已驳回
+// 认证状态统计：已认证 / 待审核 / 已驳回（来源 /stats/regulator/cert-status）
 const statusMap = ref({ certified: 0, pending: 0, rejected: 0 })
-// 最新待处理告警
+// 最新待处理告警（接口按触发时间倒序返回，此处仅保留前 5 条）
 const topAlerts = ref([])
 
-// 待处理告警数量
+// 待处理告警数量：用于告警面板徽标与统计卡片的“待处理告警”项
 const pendingAlerts = computed(() => overview.value.pendingAlerts || 0)
 
 // 顶部统计卡片数据：企业数 / 累计碳排放 / 已认证记录 / 待处理告警（link 为点击跳转地址）
+// 累计碳排放取整展示（toFixed(0)），单位统一为 tCO₂
 const stats = computed(() => [
   { label: '监管企业', value: overview.value.enterpriseCount || 0, unit: '家', icon: 'OfficeBuilding', link: '/regulator/enterprise' },
   { label: '累计碳排放', value: Number(overview.value.totalEmission || 0).toFixed(0), unit: 'tCO₂', icon: 'DataAnalysis', link: '/regulator/industry-stats' },
@@ -115,6 +129,8 @@ const stats = computed(() => [
 ])
 
 // 行业碳排放对比柱状图配置：x 轴为行业，y 轴为 tCO₂ 排放量
+// 数据源为 getRegulatorIndustryEmission；配置函数内部读取 industries / industryValues，
+// 由 useECharts 的 watchEffect 追踪依赖，接口数据更新后自动重绘
 const industryOption = () => ({
   tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
   grid: { left: 50, right: 20, top: 20, bottom: 30 },
@@ -130,6 +146,7 @@ const industryOption = () => ({
 const { chartRef: industryChartRef } = useECharts(industryOption)
 
 // 认证状态分布饼图配置（环形图）
+// 数据源为 getRegulatorCertStatus，三段分别对应已认证 / 待审核 / 已驳回
 const statusOption = () => ({
   tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
   legend: { bottom: 0 },
@@ -151,10 +168,11 @@ const { chartRef: statusChartRef } = useECharts(statusOption)
 // 告警级别中文映射：high→高危，medium→中危，low→低危
 function levelLabel(l) { return { high: '高危', medium: '中危', low: '低危' }[l] }
 
-// 拉取监管总览数据
+// 拉取监管总览数据：四个接口并行请求，避免串行等待
 async function load() {
   loading.value = true
   try {
+    // 返回依次为：概览指标 / 行业排放 / 认证状态 / 待处理告警
     const [ov, industry, certStatus, alertList] = await Promise.all([
       getRegulatorOverview(),
       getRegulatorIndustryEmission(),
@@ -162,9 +180,11 @@ async function load() {
       getAlerts({ status: 'pending' })
     ])
     overview.value = ov || {}
+    // 行业接口返回 [{ industry, amount }]，拆成名称与数值两个数组供柱状图使用；数值四舍五入后再绘制
     industries.value = (industry || []).map(i => i.industry)
     industryValues.value = (industry || []).map(i => Math.round(i.amount))
     statusMap.value = certStatus || { certified: 0, pending: 0, rejected: 0 }
+    // 首页仅展示最新 5 条，完整列表在告警页查看
     topAlerts.value = (alertList || []).slice(0, 5)
   } finally {
     loading.value = false
@@ -176,6 +196,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）：基础样式，本页无 scoped 断点规则 ===== */
+/* ===== 移动端（≤767px）：由 isMobile 切换结构（告警卡片列表、图表高度 240px），卡片外观来自全局 mobile.css ===== */
 /* 顶部欢迎横幅：紫色渐变背景，左侧文字 + 右侧图标 */
 .welcome-banner {
   background: linear-gradient(135deg, #8b5cf6, #6d28d9);

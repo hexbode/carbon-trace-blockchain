@@ -2,6 +2,12 @@
   UserManage.vue —— 用户管理页（管理员）
   用途：管理后台系统用户账号，支持按用户名/角色筛选，新增、编辑、重置密码与删除用户，
   并为企业用户关联所属企业。
+  路由：/regulator/users（name: UserManage，roles: regulator / admin）
+  依赖接口：@/api/user 的 getUsers、createUser、updateUser、deleteUser、resetUserPassword；
+           @/api/enterprise 的 getEnterprises（“所属企业”下拉选项与名称回显）
+  字段口径：role = enterprise / auditor / regulator / admin；status = active 视为正常，其余值一律视为禁用；
+           用户名仅在新增时填写（编辑时禁用）；密码不在本页维护，重置后统一为 123456。
+  说明：列表一次拉取全量数据，用户名/角色筛选在前端 computed 完成，本页无分页组件。
 -->
 <template>
   <div class="page-container">
@@ -17,6 +23,7 @@
     </div>
 
     <!-- 筛选区：按用户名、角色过滤用户列表 -->
+    <!-- 筛选在前端即时生效；角色下拉未包含“审核人员”，该角色账号需在“全部”下查看 -->
     <div class="panel mb-16">
       <div class="panel-body">
         <el-form :inline="true" :model="filters">
@@ -35,6 +42,7 @@
     </div>
 
     <!-- 用户列表：展示用户名、角色、所属企业、状态与操作 -->
+    <!-- 状态字段：status === 'active' 显示“正常”，其余显示“禁用”；本页不提供启停用开关 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
         <!-- 手机端卡片列表 -->
@@ -60,6 +68,7 @@
           </div>
         </div>
 
+        <!-- 桌面端表格（>767px）：角色用标签区分颜色，所属企业由 enterpriseId 反查企业名称展示 -->
         <el-table v-else :data="filteredList" stripe v-loading="loading">
           <el-table-column prop="username" label="用户名" min-width="140" />
           <el-table-column prop="name" label="姓名" min-width="120" />
@@ -94,6 +103,7 @@
     </div>
 
     <!-- 新增/编辑用户弹窗：角色为企业用户时需选择所属企业 -->
+    <!-- 用户名编辑时禁用；切换角色会清空已选企业，避免非企业用户残留 enterpriseId -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑用户' : '新增用户'" width="520px">
       <!-- 内容区：手机端限制高度并允许滚动，保证表单可完整填写 -->
       <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
@@ -122,6 +132,7 @@
         </el-form>
       </div>
       <template #footer>
+        <!-- 保存：先做必填校验，再按 form.id 分派新增或更新 -->
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submitForm" :loading="submitting">保存</el-button>
       </template>
@@ -145,8 +156,9 @@ import { useDevice } from '@/composables/useDevice'
 const { isMobile } = useDevice()
 
 // ===== 筛选与列表 =====
+// 筛选条件：用户名关键字 + 角色
 const filters = reactive({ username: '', role: '' })
-// 用户列表
+// 用户列表（接口一次返回全量，前端筛选，无分页）
 const users = ref([])
 // 企业列表（用于展示与选择所属企业）
 const enterprises = ref([])
@@ -154,6 +166,7 @@ const enterprises = ref([])
 const loading = ref(false)
 
 // 根据用户名与角色条件过滤用户列表
+// 用户名为包含匹配，角色为精确匹配，两者同时生效
 const filteredList = computed(() =>
   users.value.filter(u =>
     (!filters.username || u.username.includes(filters.username)) &&
@@ -162,8 +175,10 @@ const filteredList = computed(() =>
 )
 
 // 角色值 → 中文标签
+// 兼容 auditor（审核人员）：该角色存在账号数据，但筛选下拉与新增表单未提供此选项
 function roleLabel(r) { return { enterprise: '企业用户', auditor: '审核人员', regulator: '监管人员', admin: '系统管理员' }[r] }
 // 角色值 → 标签颜色类型
+// enterprise 与 auditor 未配置颜色，回退为 el-tag 默认样式
 function roleType(r) { return { enterprise: '', regulator: 'warning', admin: 'danger' }[r] }
 // 根据企业 ID 获取企业名称，未找到返回 "-"
 function enterpriseName(id) { return enterprises.value.find(e => e.id === id)?.name || '-' }
@@ -171,10 +186,13 @@ function enterpriseName(id) { return enterprises.value.find(e => e.id === id)?.n
 // ===== 新增/编辑表单 =====
 const showForm = ref(false)
 const formRef = ref()
+// 表单响应式状态：id 为空表示新增
+// 编辑时 Object.assign 会一并复制 status 等非表单字段，提交 {...form} 回传，保存不会丢失账号状态
 const form = reactive({ id: '', username: '', name: '', role: 'enterprise', enterpriseId: '', phone: '' })
 // 提交按钮加载态
 const submitting = ref(false)
-// 表单校验规则
+// 表单校验规则：用户名、姓名、角色、联系电话必填
+// enterpriseId 未配置校验规则，即企业用户可不选所属企业；新增用户由后端设置默认密码 123456
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
@@ -183,6 +201,7 @@ const rules = {
 }
 
 // 拉取用户与企业数据
+// 两个接口并行；企业列表仅用于所属企业的下拉与名称回显
 async function load() {
   loading.value = true
   try {
@@ -195,6 +214,7 @@ async function load() {
 }
 
 // 打开表单：传入 row 为编辑，否则为新增（重置表单）
+// 先重置为空表单再覆盖 row，避免上一次编辑的 enterpriseId 等字段残留
 function openForm(row) {
   if (row) Object.assign(form, row)
   else Object.assign(form, { id: '', username: '', name: '', role: 'enterprise', enterpriseId: '', phone: '' })
@@ -202,6 +222,7 @@ function openForm(row) {
 }
 
 // 校验通过后保存：有 id 则更新已有用户，否则新增；成功后刷新列表
+// 校验失败直接中断；提交期间保存按钮处于 loading，防止重复提交
 async function submitForm() {
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return

@@ -6,7 +6,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 区块视图（字段映射自真实链的区块，对外契约与旧实现保持一致）
+ * 区块视图（字段映射自真实链的区块，对外契约与旧实现保持一致）。
+ *
+ * 该对象由链网关按真实区块拼装，不接受前端回写；其中 {@code merkleRoot}、{@code nonce}
+ * 是旧链字段名，在真实链上分别对应交易根与区块 nonce，语义已不完全等价，仅作展示。
+ * {@code transactions} 只包含存证合约的 certify 交易，不是区块全量交易。
  */
 @Data
 public class ChainBlockView {

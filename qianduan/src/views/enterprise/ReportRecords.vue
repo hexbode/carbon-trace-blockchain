@@ -1,6 +1,9 @@
 <!--
   ReportRecords.vue - 报告提交记录页（企业端）
   用途：展示本企业所有碳排放报告的提交状态与审核结果，支持按报告期/状态筛选及查看报告详情
+  路由：/enterprise/records（name: ReportRecords，仅 enterprise 角色可访问）
+        支持 /enterprise/records?status=certified|pending|rejected 直达对应状态
+  依赖：报告记录接口；活动数据与排放因子为报告记录的联查展示字段，详情抽屉中完整呈现
 -->
 <template>
   <div class="page-container">
@@ -10,7 +13,8 @@
       <p>查看本企业所有碳排放报告的提交状态与审核结果</p>
     </div>
 
-    <!-- 统计卡片区：汇总提交总数及各审核状态数量，点击卡片筛选下方列表 -->
+    <!-- 统计卡片区：汇总提交总数及各审核状态数量，点击卡片筛选下方列表
+         数值在前端按已加载的记录列表统计（非服务端汇总），选中状态以 filters.status 为准 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="6" v-for="s in stats" :key="s.label">
         <div class="stat-card clickable" :class="{ active: filters.status === s.status }" @click="selectStatus(s.status)">
@@ -21,7 +25,7 @@
     </el-row>
     
     <div class="panel">
-      <!-- 筛选区：关键词搜索（报告日期与状态通过上方统计卡片筛选） -->
+      <!-- 筛选区：仅关键词搜索；报告日期与状态通过上方统计卡片筛选，和关键词条件叠加生效 -->
       <div class="panel-body" style="padding: 16px 20px 0">
         <el-form :inline="true" :model="filters">
           <el-form-item label="关键词">
@@ -31,7 +35,9 @@
           </el-form-item>
         </el-form>
       </div>
-      <!-- 报告列表：手机端用卡片列表，桌面端用表格 -->
+      <!-- 报告列表：手机端用卡片列表，桌面端用表格
+           卡片展示活动数据与排放因子；桌面表格为保持列宽仅展示关键字段，完整字段见详情抽屉
+           列表一次性渲染接口返回的全部记录，未做分页 -->
       <div style="padding: 0 20px 20px">
         <div v-if="isMobile" v-loading="loading" class="m-list">
           <el-empty v-if="!filtered.length" description="暂无报告记录" :image-size="70" />
@@ -86,7 +92,8 @@
       </div>
     </div>
 
-    <!-- 报告详情抽屉：展示选中报告的完整信息，含电子防伪码与审核意见 -->
+    <!-- 报告详情抽屉：展示选中报告的完整信息，含活动数据、排放因子、电子防伪码与审核意见
+         「重新提交」按钮当前与「详情」行为相同（只打开抽屉），实际重新申请需在认证申请页发起 -->
     <el-drawer v-model="showDetail" title="报告详情" size="520px">
       <div v-if="current">
         <el-descriptions :column="1" border>
@@ -136,7 +143,8 @@ const loading = ref(false)
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 筛选条件：关键词与审核状态（状态默认取路由 query 中的 status，由统计卡片控制）
+// 筛选条件：关键词与审核状态（状态初始取路由 query.status，用于首页卡片直达；
+// 仅在组件初始化时读取一次，后续同一路由内的 query 变化不会同步到此处）
 const filters = reactive({ keyword: '', status: route.query.status || '' })
 
 // 关键词可匹配的字段：报告编号、排放源、提交人、审核人、报告期、提交时间（后两者支持按日期搜索）
@@ -148,13 +156,13 @@ function matchKeyword(row) {
   return keywordFields.some(f => String(row[f] || '').toLowerCase().includes(kw))
 }
 
-// 经筛选后的报告列表（同时匹配关键词与状态条件）
+// 经筛选后的报告列表（关键词与状态条件同时满足；status 为空表示不限状态）
 const filtered = computed(() => myRecords.value.filter(r =>
   matchKeyword(r) &&
   (!filters.status || r.status === filters.status)
 ))
 
-// 各状态报告数量统计
+// 各状态报告数量统计（基于未筛选的完整列表，因此卡片数字不随筛选条件变化）
 const certified = computed(() => myRecords.value.filter(r => r.status === 'certified').length)
 const pending = computed(() => myRecords.value.filter(r => r.status === 'pending').length)
 const rejected = computed(() => myRecords.value.filter(r => r.status === 'rejected').length)
@@ -197,6 +205,7 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式；≤767px 的移动端排版由 isMobile + mobile.css 处理 ===== */
 /* 可点击的统计卡片：手型光标提示可交互 */
 .stat-card.clickable {
   cursor: pointer;

@@ -35,6 +35,11 @@ import java.util.UUID;
  *   5. 落盘前对目标路径归一化并校验仍位于头像目录内，防止路径穿越；
  *   6. 原始文件名去路径、去控制字符后仅用于回显，且限制长度；
  *   7. 写入失败只记录日志并返回通用提示，不向前端泄露服务器路径。
+ *
+ * 依赖：仅本地文件系统与 carbon.upload.dir 配置；访问映射见 WebMvcConfig，安全响应头见 SecurityHeaderFilter。
+ * 安全边界：接口位于 /api/** 下，需要登录（不在免登录白名单）；上传成功后的 /uploads/** 链接本身不鉴权，
+ * 因此文件名使用不可预测的 UUID，且内容经过文件头校验，避免被当作脚本或 HTML 托管。
+ * 链上写：本控制器不触发任何链上操作。
  */
 @Slf4j
 @RestController
@@ -50,13 +55,24 @@ public class FileController {
     /** 头像存放目录（绝对路径） */
     private final Path avatarDir;
 
+    /**
+     * 构造时解析上传根目录，并固定头像子目录 avatar。
+     * 使用绝对路径 + normalize，避免运行目录不同导致落盘位置漂移。
+     *
+     * @param uploadDir 上传根目录配置（carbon.upload.dir，缺省 ./uploads）
+     */
     public FileController(@Value("${carbon.upload.dir:./uploads}") String uploadDir) {
         this.avatarDir = Paths.get(uploadDir).toAbsolutePath().normalize().resolve("avatar");
     }
 
     /**
-     * 上传头像：保存到本地磁盘 avatar 子目录，返回可直接通过 /uploads/avatar/** 访问的相对地址。
-     * 文件为空、超过 5MB、内容不是受支持的图片、扩展名与内容不一致均返回 400；写入失败返回 500。
+     * POST /api/files/avatar —— 上传头像图片（需登录）。
+     *
+     * 参数：multipart 表单字段 file。
+     * 返回：{url: "/uploads/avatar/{uuid}.{ext}", name: 清洗后的原始文件名, size: 字节数}。
+     * 错误码：400 文件为空 / 超过 5MB / 不是受支持的图片 / 扩展名与内容不一致 / 路径非法；
+     *        401 未登录；500 落盘失败（仅通用文案，不暴露服务器路径）。
+     * 链上写：无。
      */
     @PostMapping("/avatar")
     public Map<String, Object> uploadAvatar(@RequestParam("file") MultipartFile file) {
@@ -70,6 +86,7 @@ public class FileController {
         }
 
         // 以文件头识别真实类型，不信任客户端的扩展名与 Content-Type
+        // 校验与落盘都基于同一份内存内容，避免“校验后被替换”的 TOCTOU 问题
         String realExt = detectImageType(content);
         if (realExt == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "文件内容不是有效的图片，仅支持 jpg / jpeg / png / gif / webp 格式");
@@ -77,6 +94,8 @@ public class FileController {
 
         String original = sanitizeFileName(file.getOriginalFilename());
         String claimedExt = extensionOf(original);
+        // 客户端扩展名是唯一由用户控制的输入：允许省略，但一旦提供就必须与文件头一致
+        // （例如把 HTML 改名成 .jpg 会在此被拒绝）
         if (!claimedExt.isEmpty() && !isSameType(claimedExt, realExt)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "图片扩展名与文件内容不一致，请重新选择图片");
         }
@@ -106,7 +125,14 @@ public class FileController {
         return result;
     }
 
-    /** 读取上传内容，最多读取 MAX_SIZE + 1 字节，用于判断是否超限 */
+    /**
+     * 读取上传内容，最多读取 MAX_SIZE + 1 字节，用于判断是否超限。
+     * 只多读 1 字节即可判断“是否超过上限”，避免把超大文件整个读入内存。
+     *
+     * @param file 上传的文件
+     * @return 实际内容（超限时为 MAX_SIZE + 1 字节）
+     * @throws ApiException 400：读取失败
+     */
     private byte[] readContent(MultipartFile file) {
         try (InputStream in = file.getInputStream()) {
             return in.readNBytes((int) MAX_SIZE + 1);
@@ -118,7 +144,10 @@ public class FileController {
 
     /**
      * 按文件头（magic bytes）识别图片真实类型，返回规范扩展名；无法识别返回 null。
-     * JPEG: FF D8 FF；PNG: 89 50 4E 47 0D 0A 1A 0A；GIF: GIF87a / GIF89a；WebP: RIFF....WEBP
+     * JPEG: FF D8 FF；PNG: 89 50 4E 47 0D 0A 1A 0A；GIF: GIF87a / GIF89a；WebP: RIFF....WEBP。
+     *
+     * @param b 文件内容
+     * @return jpg / png / gif / webp；不匹配任何一种则 null
      */
     private static String detectImageType(byte[] b) {
         if (b.length >= 3
@@ -144,7 +173,13 @@ public class FileController {
         return null;
     }
 
-    /** 扩展名与真实类型是否匹配（jpeg / jpg 视为同一类型） */
+    /**
+     * 扩展名与真实类型是否匹配（jpeg / jpg 视为同一类型）。
+     *
+     * @param claimedExt 客户端声明的扩展名（小写）
+     * @param realExt    文件头识别出的类型
+     * @return true 表示一致
+     */
     private static boolean isSameType(String claimedExt, String realExt) {
         if ("jpg".equals(realExt)) {
             return "jpg".equals(claimedExt) || "jpeg".equals(claimedExt);
@@ -152,7 +187,12 @@ public class FileController {
         return realExt.equals(claimedExt);
     }
 
-    /** 取小写扩展名，无扩展名返回空串 */
+    /**
+     * 取小写扩展名。
+     *
+     * @param name 文件名
+     * @return 最后一个点之后的部分（小写）；无扩展名或 name 为 null 时返回空串
+     */
     private static String extensionOf(String name) {
         if (name == null || !name.contains(".")) {
             return "";
@@ -163,6 +203,9 @@ public class FileController {
     /**
      * 清洗原始文件名：只保留文件名部分（去掉路径）、剔除控制字符并限长。
      * 该值仅用于前端回显，不参与任何路径拼接。
+     *
+     * @param name 客户端提交的原始文件名（不可信）
+     * @return 安全用于展示的文件名；null 时返回空串
      */
     private static String sanitizeFileName(String name) {
         if (name == null) {

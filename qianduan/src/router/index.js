@@ -3,6 +3,11 @@
  * @description 定义"碳链通"碳排放管理系统的全部前端路由，包含企业端、审核端、监管端
  *              三大业务端的页面跳转、侧边栏菜单配置以及全局路由守卫（登录校验 + 角色鉴权）。
  * @module 路由模块
+ *
+ * 依赖：vue-router 的 createRouter / createWebHashHistory。
+ * 导出：menuConfig（各端侧边栏菜单）、router（路由实例，默认导出）。
+ * 路由分层：/login 独立页；/public/** 公共查询端（免登录）；/ 主布局下挂载
+ *          企业端、审核端、监管端与个人中心（需登录 + 角色匹配）。
  */
 
 // 引入 vue-router 的路由创建方法与 Hash 模式历史记录
@@ -104,6 +109,10 @@ const routes = [
 ]
 
 // 创建路由实例，采用 Hash 模式历史记录（兼容静态部署环境）
+// Hash 模式下地址形如 http://host/#/enterprise/home，路由片段位于 # 之后：
+//   1. 刷新或直接访问深层路径时，请求始终落在 index.html，无需服务端配置 history 回退规则；
+//   2. 适合 Nginx 静态托管或直接打开构建产物，避免 404；
+//   3. 服务端与前端路由不会冲突，代价是 URL 带 # 且不参与 SEO。
 const router = createRouter({
   history: createWebHashHistory(),
   routes
@@ -111,40 +120,48 @@ const router = createRouter({
 
 // ============ 全局前置守卫 ============
 // 负责：动态设置页面标题、登录态校验、角色权限鉴权
+// 执行顺序：标题 → 公共端免登录 → 登录页放行 → 登录态校验 → 角色校验
 router.beforeEach((to, from, next) => {
   // 从本地存储读取登录令牌与用户信息
+  // 与 store/index.js、utils/request.js 使用同一组持久化键，保证三处登录态一致
   const token = localStorage.getItem('carbon_token')
   const userStr = localStorage.getItem('carbon_user')
   // 根据路由 meta.title 动态更新浏览器标签页标题
   document.title = to.meta.title ? `${to.meta.title} - 碳链通` : '碳链通'
 
   // 公共查询端无需登录
+  // 只要路径以 /public 开头即放行，不读取 token，也不做角色判断，公众可直接访问
   if (to.path.startsWith('/public')) {
     next()
     return
   }
 
   // 登录页直接放行
+  // 已登录用户访问登录页同样放行，登录页不额外拦截，刷新登录态由本地存储维持
   if (to.path === '/login') {
     next()
     return
   }
 
   // 未登录则强制跳转登录页
+  // token 与 user 缺一不可：仅存 token 而无用户信息时无法完成角色鉴权
   if (!token || !userStr) {
     next('/login')
     return
   }
 
   // 角色权限校验：若路由声明了 roles 且当前用户角色不在其中，则重定向到对应端首页
+  // 角色来源为登录成功后持久化的用户信息；admin 在监管端路由的 roles 中同样被允许
   const user = JSON.parse(userStr)
   if (to.meta.roles && !to.meta.roles.includes(user.role)) {
     // 重定向到对应端首页
+    // 未知角色回退到企业首页，避免停留在无权限页面
     const redirectMap = { enterprise: '/enterprise/home', auditor: '/auditor/home', regulator: '/regulator/home', admin: '/regulator/home' }
     next(redirectMap[user.role] || '/enterprise/home')
     return
   }
 
+  // 登录态与角色均通过，正常进入目标路由
   next()
 })
 

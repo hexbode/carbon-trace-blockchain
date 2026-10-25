@@ -64,6 +64,13 @@ public class StatsServiceImpl implements StatsService {
 
     // ==================== 监管端 ====================
 
+    /**
+     * 监管端总览：企业总数、全量排放总量、有效认证数、待处理告警数。
+     * 口径：总排放量不按记录状态过滤（待审、驳回均计入），与企业端总览一致；
+     * certCount 只统计 status=valid 的认证，pendingAlerts 只统计 status=pending 的告警。
+     *
+     * @return {enterpriseCount, totalEmission, certCount, pendingAlerts}
+     */
     @Override
     public Map<String, Object> regulatorOverview() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
@@ -79,12 +86,19 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 监管端行业排放分布：以企业表为行业全集（无排放的行业也返回 0），
+     * 再按「排放记录 → 企业 → 行业」归属累加排放量；企业已不存在的记录直接跳过，避免产生空指标。
+     *
+     * @return 行业列表 [{industry, amount}]，金额保留 2 位小数
+     */
     @Override
     public List<Map<String, Object>> regulatorIndustryEmission() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
         Map<String, Enterprise> enterpriseMap = toEnterpriseMap(enterprises);
 
         Map<String, BigDecimal> byIndustry = new LinkedHashMap<>();
+        // 先按企业表铺满行业全集并置 0，保证没有任何排放的行业也出现在图例中
         for (Enterprise enterprise : enterprises) {
             byIndustry.putIfAbsent(enterprise.getIndustry(), ZERO);
         }
@@ -104,6 +118,12 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 监管端认证状态分布：以排放记录状态为准（certified / pending / rejected），三者互斥且计数为记录条数。
+     * 认证记录侧的 revoked / invalid 状态不进入本图口径。
+     *
+     * @return {certified, pending, rejected}
+     */
     @Override
     public Map<String, Object> regulatorCertStatus() {
         List<EmissionRecord> records = emissionRecordMapper.selectList(null);
@@ -114,6 +134,12 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 监管端行业汇总：每个行业的企业数、排放量、有效认证数。
+     * 认证数只累计 status=valid 且所属企业仍存在的认证记录，保证认证与行业归属口径一致。
+     *
+     * @return 行业列表 [{industry, enterpriseCount, emission, certCount}]
+     */
     @Override
     public List<Map<String, Object>> regulatorIndustrySummary() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
@@ -152,6 +178,12 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 监管端行业排行：按行业排放量降序，percent 为该行业占全部行业排放的比例（1 位小数）。
+     * 总量为 0（无任何排放）时 percent 统一返回 0.0，由 {@link #percent} 规避除零。
+     *
+     * @return 行业列表 [{industry, total, percent}]
+     */
     @Override
     public List<Map<String, Object>> regulatorIndustryRanking() {
         Map<String, BigDecimal> byIndustry = new LinkedHashMap<>();
@@ -162,6 +194,7 @@ public class StatsServiceImpl implements StatsService {
                 byIndustry.merge(enterprise.getIndustry(), nz(record.getAmount()), BigDecimal::add);
             }
         }
+        // 全行业排放总量作为占比分母；无数据时为 0，由 percent() 统一返回 0.0
         BigDecimal grand = byIndustry.values().stream().reduce(ZERO, BigDecimal::add);
         return byIndustry.entrySet().stream()
                 .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
@@ -175,6 +208,12 @@ public class StatsServiceImpl implements StatsService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 监管端企业排行：以企业表为基准（无排放企业也入榜，排放量为 0），按排放量降序；
+     * certCount 只累计 valid 认证，percent 为该企业占全部企业排放的比例（1 位小数）。
+     *
+     * @return 企业列表 [{name, industry, total, percent, certCount}]
+     */
     @Override
     public List<Map<String, Object>> regulatorEnterpriseRanking() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
@@ -211,6 +250,13 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 监管端企业排放趋势（按行业分组的多序列）。
+     * 月份轴由真实报告期决定；每个行业预填整条轴的 0 值，保证各序列与 months 一一对齐；
+     * 报告期不在轴上的记录（格式非法或轴上不存在）直接丢弃，避免数据与坐标轴错位。
+     *
+     * @return {months: [yyyy-MM], series: [{name: 行业, data: [月排放量]}]}
+     */
     @Override
     public Map<String, Object> regulatorEnterpriseTrend() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);
@@ -251,6 +297,14 @@ public class StatsServiceImpl implements StatsService {
 
     // ==================== 企业端 ====================
 
+    /**
+     * 企业端总览：该企业全量排放、已认证记录数、待认证记录数、有效证书数。
+     * certifiedCount / pendingCount 统计排放记录状态，certCount 统计认证记录（valid）；
+     * 认证记录只在审核通过时生成，故 certCount 与 certifiedCount 可能不一致（认证被撤销时尤甚）。
+     *
+     * @param enterpriseId 企业编号
+     * @return {totalEmission, certifiedCount, pendingCount, certCount}
+     */
     @Override
     public Map<String, Object> enterpriseOverview(String enterpriseId) {
         List<EmissionRecord> records = emissionRecordMapper.selectList(
@@ -268,6 +322,13 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 企业端排放趋势：按报告期聚合该企业排放量。
+     * 月份轴取自该企业真实报告期（无记录时回退最近 12 个月），data 与 months 等长，缺月补 0。
+     *
+     * @param enterpriseId 企业编号
+     * @return {months, data}
+     */
     @Override
     public Map<String, Object> enterpriseTrend(String enterpriseId) {
         List<EmissionRecord> records = emissionRecordMapper.selectList(
@@ -286,6 +347,12 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 企业端排放源占比：按排放源名称聚合该企业排放量，名称为空的记录统一归入「其他」。
+     *
+     * @param enterpriseId 企业编号
+     * @return 排放源列表 [{name, value}]，value 保留 2 位小数
+     */
     @Override
     public List<Map<String, Object>> enterpriseSourceShare(String enterpriseId) {
         List<EmissionRecord> records = emissionRecordMapper.selectList(
@@ -307,6 +374,14 @@ public class StatsServiceImpl implements StatsService {
 
     // ==================== 审核端 ====================
 
+    /**
+     * 审核端总览：待审数、今日已审数、累计已审数。
+     * todayDone 按 auditedAt 的本地日期等于今天统计，反映当日审核动作；
+     * totalDone 只统计当前处于 certified / rejected 的记录；记录被重新申请后会回到 pending
+     * 并从 totalDone 移出，因此两项口径不同，不可直接相减。
+     *
+     * @return {pending, todayDone, totalDone}
+     */
     @Override
     public Map<String, Object> auditorOverview() {
         List<ReportRecord> reports = reportRecordMapper.selectList(null);
@@ -327,6 +402,12 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 审核端近 7 天审核量：从今天往前共 7 天（含今天），按 auditedAt 的本地日期逐日计数；
+     * 无审核记录的日期补 0，保证前端坐标轴连续。
+     *
+     * @return {days: [周一…], data: [每日审核数]}
+     */
     @Override
     public Map<String, Object> auditorRecent7Days() {
         List<ReportRecord> reports = reportRecordMapper.selectList(null);
@@ -335,6 +416,7 @@ public class StatsServiceImpl implements StatsService {
         List<String> days = new ArrayList<>();
         List<Long> data = new ArrayList<>();
         for (int i = 6; i >= 0; i--) {
+            // 从 6 天前推进到今天，得到连续 7 天的坐标轴
             LocalDate date = today.minusDays(i);
             days.add(weekdayLabel(date.getDayOfWeek()));
             long count = reports.stream()
@@ -348,6 +430,11 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 审核端今日已审列表：按审核时间倒序查询后在内存过滤出当天记录，字段裁剪为列表展示所需。
+     *
+     * @return 今日审核记录列表（可能为空）
+     */
     @Override
     public List<Map<String, Object>> auditorTodayList() {
         LocalDate today = LocalDate.now();
@@ -372,6 +459,13 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 审核端今日汇总：今日已审总数、通过数、驳回数。
+     * total 统计今日有审核动作的全部记录；当日被重新申请回 pending 的记录仍计入 total，
+     * 但不再计入 passed / rejected，故 total 可能大于两者之和。
+     *
+     * @return {total, passed, rejected}
+     */
     @Override
     public Map<String, Object> auditorTodaySummary() {
         LocalDate today = LocalDate.now();
@@ -397,6 +491,13 @@ public class StatsServiceImpl implements StatsService {
         return result;
     }
 
+    /**
+     * 审核端待认证队列：status=pending，按提交时间升序（先提交先审），截断到 limit 条。
+     * limit 直接拼入 SQL，调用方须传整数（Controller 已保证）。
+     *
+     * @param limit 条数上限，null 或 &lt;=0 时取默认 6
+     * @return 待审报告列表（字段裁剪为队列展示所需）
+     */
     @Override
     public List<Map<String, Object>> auditorPendingQueue(Integer limit) {
         int size = (limit == null || limit <= 0) ? 6 : limit;
@@ -426,6 +527,14 @@ public class StatsServiceImpl implements StatsService {
 
     // ==================== 公共端 ====================
 
+    /**
+     * 公共端企业排放概览：逐企业聚合总排放、有效认证数、待认证数及最新报告期。
+     * 企业数量有限，直接全量读取后在内存按企业分组，避免逐企业查库；
+     * latestPeriod 取报告期字符串最大值（yyyy-MM 可直接字典序比较）。
+     *
+     * @return 企业列表 [{enterpriseId, enterpriseName, industry, totalEmission, certCount,
+     *         pendingCount, latestPeriod}]
+     */
     @Override
     public List<Map<String, Object>> publicEnterpriseEmissions() {
         List<Enterprise> enterprises = enterpriseMapper.selectList(null);

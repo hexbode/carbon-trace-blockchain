@@ -5,6 +5,12 @@
            核算方法错误等问题时，可撤销认证并记录撤销原因与详细说明。
            页面提供有效认证、已撤销、撤销率统计，支持按企业名称与状态筛选，
            以及撤销详情查看。撤销后链上电子防伪码保留但标记为已撤销。
+  路由：/regulator/revoke（name: CertificationRevoke，roles: regulator / admin）
+  依赖接口：@/api/certification 的 getCertifications（认证列表）、
+           revokeCertification（POST /certifications/{id}/revoke，入参 { reason, detail }）；
+           @/api/compliance 的 getCertificateCompliance（读取链上合规判定快照）
+  关键约束：撤销原因必填；撤销是终局操作（valid → revoked 后不可恢复），
+           后端受理后会把链上电子防伪码标记为已撤销，前端只负责收集原因并刷新列表。
 -->
 <template>
   <div class="page-container">
@@ -15,6 +21,7 @@
     </div>
 
     <!-- 顶部统计卡片：有效认证 / 已撤销 / 撤销率（前两个点击筛选下方列表） -->
+    <!-- 交互：点击“有效认证/已撤销”按状态筛选，再次点击同一卡片取消筛选；撤销率不可点击 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="8" v-for="s in stats" :key="s.label">
         <div
@@ -32,6 +39,7 @@
     <div class="panel">
       <div class="panel-body" style="padding: 16px 20px 0">
         <!-- 筛选区：关键词搜索 + 状态（有效/已撤销）筛选 -->
+        <!-- 关键词在认证编号、企业名称、报告日期、审核人、认证时间五个字段上做包含匹配（见 keywordFields） -->
         <el-form :inline="true" :model="filters">
           <el-form-item label="关键词">
             <el-input v-model="filters.keyword" placeholder="认证编号 / 企业名称 / 报告日期 / 审核人" clearable style="width: 260px">
@@ -75,6 +83,7 @@
         </div>
 
         <!-- 认证记录表格 -->
+        <!-- 桌面端表格（>767px）：状态列区分有效/已撤销；操作列按状态显示“撤销认证”或“撤销详情” -->
         <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="id" label="认证编号" min-width="130" align="center" />
           <el-table-column prop="enterpriseName" label="企业名称" min-width="130" show-overflow-tooltip align="center" />
@@ -112,6 +121,7 @@
     </div>
 
     <!-- 撤销认证对话框：警示说明 + 认证信息描述 + 撤销原因表单 -->
+    <!-- 撤销原因必选（下拉五选一），详细说明选填；确认后调用撤销接口，操作不可回退 -->
     <el-dialog v-model="showRevoke" title="撤销认证" width="500px">
       <!-- 内容区：手机端限制高度并允许滚动，保证撤销原因可完整填写 -->
       <div v-if="current" :style="isMobile ? { maxHeight: '60vh', overflowY: 'auto' } : null">
@@ -142,6 +152,7 @@
         </el-form>
       </div>
       <template #footer>
+        <!-- 取消不发起任何写操作；确认撤销带 loading，避免重复提交 -->
         <el-button @click="showRevoke = false">取消</el-button>
         <el-button type="danger" @click="confirmRevoke" :loading="submitting">确认撤销</el-button>
       </template>
@@ -166,13 +177,14 @@ import { useDevice } from '@/composables/useDevice'
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 筛选条件响应式状态：关键词 + 状态
+// 筛选条件响应式状态：关键词 + 状态（valid 有效 / revoked 已撤销，空串表示全部）
 const filters = reactive({ keyword: '', status: '' })
-// 认证记录列表
+// 接口返回的原始认证记录
 const certs = ref([])
 // 列表加载态
 const loading = ref(false)
 // 认证记录列表（补全 status 与 revokeReason 字段，避免空值）
+// 以 status='valid' 作为缺省状态，保证统计数据与筛选逻辑不受后端空字段影响
 const list = computed(() => certs.value.map(c => ({ ...c, status: c.status || 'valid', revokeReason: c.revokeReason || '' })))
 
 // 关键词可匹配的字段：认证编号、企业名称、报告日期、审核人、认证时间
@@ -237,6 +249,8 @@ function revoke(row) {
   showRevoke.value = true
 }
 // 确认撤销：校验原因后调用后端撤销接口，成功后刷新列表
+// 撤销原因必填在此处兜底（reason 为空时提示并中断）；detail 选填，可空字符串
+// 接口成功后由后端完成链上标记，前端仅提示并重新拉取，保证状态与链上一致
 async function confirmRevoke() {
   if (!reason.value) { ElMessage.warning('请选择撤销原因'); return }
   submitting.value = true
@@ -255,6 +269,8 @@ function viewRevoke(row) {
 }
 
 // 查看链上合规判定：读取该证书上链时由合约给出的判定快照
+// 返回结构：{ compliant, items: [{ typeLabel, level }] }；
+// compliant=true 表示未命中异常规则，false 时按规则名 + 级别逐条列出命中项
 async function viewCompliance(row) {
   const data = await getCertificateCompliance(row.id)
   const items = (data.items || []).map(i => `${i.typeLabel}（${levelLabel(i.level)}）`).join('\n')
@@ -276,6 +292,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）：基础样式，本页无 scoped 断点规则 ===== */
+/* ===== 移动端（≤767px）：由 isMobile 把表格替换为卡片列表，卡片外观来自全局 mobile.css ===== */
 /* 可点击的统计卡片：手型光标提示可交互 */
 .stat-card.clickable { cursor: pointer; }
 /* 统计卡片选中态：主题色边框 + 浅绿背景，标识当前筛选状态 */

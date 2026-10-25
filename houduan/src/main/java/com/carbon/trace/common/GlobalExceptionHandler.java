@@ -29,6 +29,18 @@ import java.util.Map;
  *   DuplicateKeyException                 唯一约束冲突，返回可读提示且不暴露表结构；
  *   DataAccessException                   其余数据库异常，返回通用校验失败提示并记录完整日志；
  *   Exception                             未知异常兜底，通用文案 + 记录堆栈日志。
+ *
+ * 统一错误码：
+ *   400 参数缺失、请求体格式错误、上传超限、唯一约束冲突、数据库校验失败；
+ *   401 未登录 / 令牌失效（实际由 AuthInterceptor 直接写出，本类通常不参与）；
+ *   403 角色不足、跨企业越权（ApiException 携带 FORBIDDEN）；
+ *   404 业务对象或静态资源不存在；
+ *   409 链上状态冲突（由链层以 ApiException 抛出，如证书已撤销、防伪码重复）；
+ *   500 未知异常兜底；
+ *   502/503 链层调用失败 / WeBASE-Front 不可达（由链层以 ApiException 抛出）。
+ * 响应体固定为 {"message": "..."}，不返回堆栈、SQL、表名字段名等内部细节。
+ *
+ * 安全边界：本类只负责“翻译”异常，不做任何鉴权；日志中保留完整堆栈但不下发到响应体。
  */
 @Slf4j
 @RestControllerAdvice
@@ -89,7 +101,10 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.INTERNAL_SERVER_ERROR, "服务繁忙，请稍后重试");
     }
 
-    /** 统一组装响应体 {"message": ...} 并按给定 HTTP 状态码返回 */
+    /**
+     * 统一组装响应体 {"message": ...} 并按给定 HTTP 状态码返回。
+     * 所有分支都必须经由此方法出参，保证错误响应结构一致，前端只需读取 message 字段。
+     */
     private ResponseEntity<Map<String, Object>> build(HttpStatus status, String message) {
         Map<String, Object> body = new HashMap<>();
         body.put("message", message);

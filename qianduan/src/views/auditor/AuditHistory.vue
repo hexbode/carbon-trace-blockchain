@@ -5,6 +5,8 @@
     1. 展示本机构已完成的审核记录（已认证 + 已驳回）
     2. 支持按审核结果（通过/驳回）和关键词（企业名称/报告编号）筛选
     3. 点击详情按钮通过抽屉展示单条审核记录的完整信息
+  路由：/auditor/history（name: AuditHistory，仅 auditor 角色可访问）
+  依赖：报告记录接口；已认证（certified）与已驳回（rejected）视为已完成审核
 -->
 <template>
   <div class="page-container">
@@ -15,7 +17,7 @@
     </div>
 
     <div class="panel">
-      <!-- 筛选表单：审核结果下拉 + 关键词输入 -->
+      <!-- 筛选表单：审核结果下拉 + 关键词输入（两者均为前端本地过滤，不重新请求接口） -->
       <div class="panel-body" style="padding: 16px 20px 0">
         <el-form :inline="true" :model="filters">
           <!-- 审核结果筛选：通过 / 驳回 / 全部 -->
@@ -31,7 +33,8 @@
           </el-form-item>
         </el-form>
       </div>
-      <!-- 审核历史列表：手机端卡片列表，桌面端表格 -->
+      <!-- 审核历史列表：已认证与已驳回记录，手机端卡片列表，桌面端表格
+           列表一次性渲染接口返回的全部记录，未做分页 -->
       <div style="padding: 0 20px 20px">
         <div v-if="isMobile" v-loading="loading" class="m-list">
           <el-empty v-if="!filtered.length" description="暂无审核历史记录" :image-size="70" />
@@ -84,7 +87,7 @@
       </div>
     </div>
 
-    <!-- 审核记录详情弹框：居中显示，展示单条记录的完整审核信息（手机端内容区可滚动） -->
+    <!-- 审核记录详情弹框：居中只读展示单条记录的完整审核信息（手机端内容区可滚动） -->
     <el-dialog v-model="showDetail" title="审核记录详情" width="620px">
       <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
         <el-descriptions :column="1" border>
@@ -130,12 +133,12 @@ const filters = reactive({ result: '', keyword: '' })
 const records = ref([])
 // 列表加载态
 const loading = ref(false)
-// 已审核列表：筛选出已认证或已驳回的报告（排除待审核）
+// 已审核列表：筛选出已认证或已驳回的报告（排除 pending，即尚未产生审核结论的记录）
 const audited = computed(() => records.value.filter(r => r.status === 'certified' || r.status === 'rejected'))
 
 // 最终展示列表：在已审核列表基础上应用筛选条件
 // - result 为空时展示全部结果
-// - keyword 匹配企业名称或报告编号
+// - keyword 按包含关系匹配企业名称或报告编号（区分大小写，未做 trim / 小写归一）
 const filtered = computed(() => audited.value.filter(r =>
   (!filters.result || r.status === filters.result) &&
   (!filters.keyword || r.enterpriseName.includes(filters.keyword) || r.id.includes(filters.keyword))
@@ -148,7 +151,7 @@ const current = ref(null)
 // 打开详情抽屉：设置当前记录并显示抽屉
 function view(row) { current.value = row; showDetail.value = true }
 
-// 拉取报告记录
+// 拉取报告记录：不传企业/机构参数，数据范围由后端按当前审核员所属机构限定
 async function load() {
   loading.value = true
   try {
@@ -163,6 +166,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）：本页无 scoped 断点规则，表格与筛选栏沿用全局样式 ===== */
+/* ===== 移动端（≤767px）适配 ===== */
 /* 手机端弹窗内容区：限制最大高度并允许滚动，保证底部按钮始终可达 */
 .dlg-scroll {
   max-height: 62vh;

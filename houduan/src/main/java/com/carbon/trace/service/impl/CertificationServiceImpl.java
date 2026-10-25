@@ -61,7 +61,16 @@ public class CertificationServiceImpl implements CertificationService {
         this.txLocator = txLocator;
     }
 
-    /** 按企业、状态、关键字过滤查询；链表数据仅从本地缓存回填交易哈希/区块，绝不逐条回链（避免超时） */
+    /**
+     * 按企业、状态、关键字过滤查询认证记录，按认证时间倒序。
+     * 链上交易哈希与区块高度只从本地定位缓存回填，绝不逐条回链（列表逐条查询会拖垮前端超时）；
+     * 实时链上数据由详情与核验接口提供。
+     *
+     * @param enterpriseId 企业编号，空则不筛选
+     * @param status       认证状态（valid / revoked / invalid），空则不筛选
+     * @param keyword      关键字，匹配认证编号、企业名称、审核人，空则不筛选
+     * @return 认证记录列表
+     */
     @Override
     public List<CertificationRecord> list(String enterpriseId, String status, String keyword) {
         LambdaQueryWrapper<CertificationRecord> wrapper = new LambdaQueryWrapper<>();
@@ -84,7 +93,14 @@ public class CertificationServiceImpl implements CertificationService {
         return list;
     }
 
-    /** 单条详情：查询后实时回填链上防伪码/交易哈希/区块信息 */
+    /**
+     * 单条详情：查询后实时回填链上防伪码、交易哈希与所在区块。
+     * 仅对单条记录回链，查询开销可接受；列表场景见 {@link #list}。
+     *
+     * @param id 认证编号（三表同号，与排放记录编号一致）
+     * @return 认证记录（链上信息已回填）
+     * @throws ApiException 404：认证记录不存在
+     */
     @Override
     public CertificationRecord getById(String id) {
         CertificationRecord record = certificationRecordMapper.selectById(id);
@@ -95,6 +111,15 @@ public class CertificationServiceImpl implements CertificationService {
         return record;
     }
 
+    /**
+     * 公共端按电子防伪码精确查询（大小写敏感）。
+     * 以链上存证为唯一依据：先由防伪码定位链上凭证，再用凭证中的排放编号关联本地认证记录；
+     * 防伪码与链上哈希最终以链上值为准回填，业务库被改动不影响展示。
+     *
+     * @param fingerprint 12 位电子防伪码
+     * @return 认证记录（已回填链上信息）
+     * @throws ApiException 404：防伪码为空、链上未匹配或本地无对应记录
+     */
     @Override
     public CertificationRecord getByFingerprint(String fingerprint) {
         if (!StringUtils.hasText(fingerprint)) {
@@ -112,7 +137,12 @@ public class CertificationServiceImpl implements CertificationService {
         return record;
     }
 
-    /** 公共端固定示例证书：无参、固定 3 张，公众无法借此遍历其他认证记录 */
+    /**
+     * 公共端固定示例证书：无参数、固定 3 张，公众无法借此遍历其他认证记录。
+     * 这三条会实时回填链上信息（仅 3 条，开销可控）。
+     *
+     * @return 示例认证记录列表，按编号升序
+     */
     @Override
     public List<CertificationRecord> listSamples() {
         // 固定返回 3 张演示证书，接口无参数，公众无法借此遍历其他认证记录
@@ -124,6 +154,17 @@ public class CertificationServiceImpl implements CertificationService {
         return list;
     }
 
+    /**
+     * 监管撤销认证：本地置为 revoked 并记录撤销原因与时间，随后写链把链上状态置为 REVOKED。
+     * 撤销是终局状态（链上只追加不删除，撤销后不可恢复），核验一律以链上状态为准。
+     * 方法本身未声明事务：若调用方处于事务中，写链由 {@link ChainSyncService#afterCommit} 推迟到提交后，
+     * 失败按退避重试，最终失败生成 chain_failed 告警；无事务时立即写链。
+     *
+     * @param id   认证编号
+     * @param body 请求体，reason 为撤销原因（必填），detail 为补充说明（可选）
+     * @return 已更新（本地已撤销）的认证记录
+     * @throws ApiException 400：撤销原因为空；404：认证记录不存在
+     */
     @Override
     public CertificationRecord revoke(String id, Map<String, Object> body) {
         // 撤销原因必填，先做入参校验再校验记录是否存在
@@ -137,6 +178,7 @@ public class CertificationServiceImpl implements CertificationService {
         record.setStatus("revoked");
         record.setRevokeReason(revokeReason);
         record.setRevokedAt(LocalDateTime.now());
+        // 先落本地（撤销原因/时间可供列表展示），再在事务提交后写链；链上状态是核验的唯一依据
         certificationRecordMapper.updateById(record);
 
         // 撤销同样要写链：链上状态变为 REVOKED 且为终局状态，核验以链上状态为准
@@ -145,7 +187,15 @@ public class CertificationServiceImpl implements CertificationService {
         return record;
     }
 
-    /** 核验：以链上存证为唯一依据，返回 {valid, msg, cert}，已撤销/已作废仍在 cert 中回传供前端展示 */
+    /**
+     * 核验电子防伪码或交易哈希，返回 {valid, msg, cert}。
+     * 以链上存证为唯一依据：先按防伪码（大小写敏感）或交易哈希定位链上凭证，再由排放编号关联认证记录；
+     * 链上状态优先——REVOKED / INVALID 均判为无效，但仍回传 cert 供前端展示失效原因。
+     * 未命中时不抛异常，统一以 valid=false + msg 表达，便于公共端直接展示。
+     *
+     * @param hash 电子防伪码或交易哈希
+     * @return {valid: Boolean, msg: String, cert: CertificationRecord（可能为 null）}
+     */
     @Override
     public Map<String, Object> verify(String hash) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -174,6 +224,8 @@ public class CertificationServiceImpl implements CertificationService {
             return result;
         }
         if (chainCert.getStatus() == ChainCertStatus.INVALID) {
+            // 作废由「删除排放记录」触发：链上只把存证标记为 INVALID，业务库认证记录已被删除，
+            // 因此 cert 可能为 null，前端仅能展示链上失效结论
             if (cert != null) {
                 applyChainInfo(cert, chainCert);
             }
@@ -196,7 +248,17 @@ public class CertificationServiceImpl implements CertificationService {
         return result;
     }
 
-    /** 认证通过：生成/更新认证记录（三表同号），构造上链命令并在事务提交后写链 */
+    /**
+     * 认证通过：生成或更新认证记录（编号与排放记录、报告记录一致，即三表同号），并在事务提交后写链。
+     * 已存在认证记录时复用原编号更新（例如驳回后重新申请再通过），不新建编号；
+     * 合规位掩码由链上合约判定，作为合规快照随存证一起上链。
+     * 链上写入注册在事务提交后执行，事务回滚不会在链上留下孤儿存证；
+     * 写链失败按退避重试，最终失败生成 chain_failed 告警，本地事务不受影响。
+     *
+     * @param report 已审核通过的报告记录（需含 emissionId、企业、报告期、排放量、防伪码、审核人）
+     * @return 已落库的认证记录（链上凭证可能在提交后才写入）
+     * @throws RuntimeException 本地落库失败时向上抛出并触发事务回滚
+     */
     @Override
     @Transactional
     public CertificationRecord certify(ReportRecord report) {
@@ -226,6 +288,7 @@ public class CertificationServiceImpl implements CertificationService {
         if (create) {
             certificationRecordMapper.insert(cert);
         } else {
+            // 已有认证记录（如驳回后重新申请）：沿用原编号与防伪码更新，保证三表同号不被破坏
             certificationRecordMapper.updateById(cert);
         }
 

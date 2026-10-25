@@ -1,6 +1,8 @@
 <!--
   CertificationApply.vue - 认证申请页（企业端）
   用途：对已提交的碳排放报告发起区块链认证申请，审核通过后生成不可篡改的认证凭证；含申请流程说明与申请弹窗
+  路由：/enterprise/apply（name: CertificationApply，仅 enterprise 角色可访问）
+  依赖：报告记录接口（列表）与申请接口；申请后状态由 pending 起重新进入审核，通过后生成认证证书
 -->
 <template>
   <div class="page-container">
@@ -10,7 +12,9 @@
       <p>对已提交的碳排放报告发起区块链认证申请，审核通过后将生成不可篡改的认证凭证</p>
     </div>
 
-    <!-- 可申请认证报告列表：展示未认证报告并提供申请入口 -->
+    <!-- 可申请认证报告列表：展示未认证报告并提供申请入口
+         包含审核中（pending）与已驳回（rejected）两种状态；已驳回报告可在此再次申请，
+         后端会把状态改回 pending 并清空原审核信息 -->
     <div class="panel mb-16">
       <div class="panel-header"><span class="title">可申请认证的报告</span></div>
       <div class="panel-body" style="padding: 0">
@@ -57,7 +61,8 @@
       </div>
     </div>
 
-    <!-- 认证申请流程说明：四步流程（提交申请→机构审核→上链存证→生成证书） -->
+    <!-- 认证申请流程说明：四步流程（提交申请→机构审核→上链存证→生成证书）
+         该流程为静态示意，前两步固定高亮，不反映具体某条报告的真实进度 -->
     <div class="panel">
       <div class="panel-header"><span class="title">认证申请流程</span></div>
       <div class="panel-body">
@@ -73,7 +78,8 @@
       </div>
     </div>
 
-    <!-- 提交认证申请对话框：展示报告信息并填写备注后确认申请 -->
+    <!-- 提交认证申请对话框：展示报告信息并填写备注后确认申请
+         备注仅用于界面说明，当前申请接口只按报告编号发起，不接收备注内容 -->
     <el-dialog v-model="showApply" title="提交认证申请" width="520px">
       <div v-if="current">
         <el-alert type="info" :closable="false" style="margin-bottom: 16px">
@@ -117,13 +123,15 @@ import { useDevice } from '@/composables/useDevice'
 const userStore = useUserStore()
 // 报告记录原始列表
 const records = ref([])
-// 已发起申请的报告编号（用于按钮置灰，纯 UI 状态）
+// 已发起申请的报告编号（用于按钮置灰，纯 UI 状态，不落库；
+// 刷新后按钮是否置灰不再由该集合决定，而以接口返回的报告状态为准）
 const appliedIds = reactive(new Set())
 // 列表加载态
 const loading = ref(false)
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
-// 可申请认证的报告：当前企业且未认证（含审核中与已驳回）的报告
+// 可申请认证的报告：当前企业且状态不是已认证（certified）的记录，
+// 即审核中（pending）与已驳回（rejected）均可发起或重新发起申请
 const applicable = computed(() => records.value
   .filter(r => r.status !== 'certified')
   .map(r => ({ ...r, applied: appliedIds.has(r.id) }))
@@ -161,7 +169,9 @@ function apply(row) {
   showApply.value = true
 }
 
-// 确认申请：调用后端接口重新发起认证（已驳回报告后端会改回审核中），成功后刷新列表
+// 确认申请：调用申请接口重新发起认证（后端将报告状态改回 pending 并清空审核信息），
+// 成功后本地记入 appliedIds 置灰按钮、关闭弹窗并刷新列表；
+// 已驳回报告的重试与首次申请走同一接口，不区分状态
 async function confirmApply() {
   if (!current.value) return
   submitting.value = true
@@ -183,6 +193,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）基础样式；≤767px 时报告列表改为卡片（isMobile），
+   流程步骤仍沿用本段横向布局，页面留白等通用适配由 mobile.css 处理 ===== */
 /* 流程步骤容器：横向均分布局 */
 .flow-steps {
   display: flex;

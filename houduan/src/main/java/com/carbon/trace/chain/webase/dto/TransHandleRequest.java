@@ -13,6 +13,9 @@ import java.util.List;
  * 二选一的签名方式：
  *  - user（本地私钥用户地址）走 /trans/handle；
  *  - signUserId（WeBASE-Sign 托管）走 /trans/handleWithSign。
+ *
+ * 字段整体采用「按需下发」：使用 {@link JsonInclude.Include#NON_NULL}，未设置的字段不会出现在
+ * 请求体中，避免把空的 signUserId 一并发送导致 WeBASE 走错签名分支。
  */
 @Data
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -27,10 +30,13 @@ public class TransHandleRequest {
     /** Sign 托管模式：WeBASE-Sign 的用户标识 */
     private String signUserId;
 
+    /** 合约名（需与 WeBASE 中登记的一致，用于匹配合约记录） */
     private String contractName;
 
+    /** 合约地址（部署产物） */
     private String contractAddress;
 
+    /** 调用的函数名，必须与 ABI 中的 name 完全一致 */
     private String funcName;
 
     /**
@@ -47,6 +53,6 @@ public class TransHandleRequest {
     /** 合约 ABI（JSON 数组），WeBASE 用它完成入参编码与返回值解码 */
     private JsonNode contractAbi;
 
-    /** 合约版本（普通合约留空） */
+    /** 合约版本（普通合约留空；非空会被 WeBASE 当作需要版本匹配的合约处理） */
     private String version;
 }

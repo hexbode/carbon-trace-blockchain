@@ -9,11 +9,18 @@ import java.util.Arrays;
  * 仅用于本地计算 ABI 函数选择器与事件 topic：
  * WeBASE 3.x 的事件订阅式查询会按等待超时返回「部分结果」，不能作为可靠的事件检索手段，
  * 因此交易归属改为直接解析区块交易的 input（见 WebaseChainGateway），需要选择器做本地判定。
+ *
+ * 实现约束：
+ *  - 摘要为 256 位、状态宽度 1600 位、吸收率 136 字节（1088 位），与以太坊一致；
+ *  - 填充字节为 0x01（Keccak 原版），不是 SHA-3 的 0x06，改错会导致选择器全部不匹配；
+ *  - 本类无状态、线程安全，但每次调用都会新建状态数组，不宜在热路径中高频调用。
  */
 public final class Keccak256 {
 
+    /** 吸收率（字节）：1600 位状态减去 2×256 位输出容量后除以 8 */
     private static final int RATE = 136;
 
+    /** 24 轮 ι 步使用的轮常数；顺序与 Keccak-f[1600] 规范一致，不可重排 */
     private static final long[] ROUND_CONSTANTS = {
             0x0000000000000001L, 0x0000000000008082L, 0x800000000000808aL, 0x8000000080008000L,
             0x000000000000808bL, 0x0000000080000001L, 0x8000000080008081L, 0x8000000000008009L,
@@ -32,20 +39,41 @@ public final class Keccak256 {
             27, 20, 39, 8, 14
     };
 
+    /**
+     * 私有构造器：本类只提供静态哈希方法，每次调用自行新建状态数组，禁止实例化。
+     */
     private Keccak256() {
     }
 
-    /** 函数选择器：keccak256(签名) 的前 4 字节（8 位十六进制，不含 0x） */
+    /**
+     * 函数选择器：keccak256(签名) 的前 4 字节（8 位十六进制，不含 0x）。
+     *
+     * 签名必须使用规范形式（如 {@code certify(string,string,...)}），不能带空格或参数名，
+     * 否则计算结果与链上交易 input 的前 4 字节不一致。
+     *
+     * @param signature 函数规范签名，如 {@code transfer(address,uint256)}
+     * @return 8 位小写十六进制选择器
+     */
     public static String selector(String signature) {
         return hashHex(signature).substring(0, 8);
     }
 
-    /** 对 UTF-8 字符串计算 Keccak-256，返回 64 位十六进制小写串 */
+    /**
+     * 对 UTF-8 字符串计算 Keccak-256。
+     *
+     * @param input 待哈希字符串，不能为 null
+     * @return 64 位小写十六进制摘要
+     */
     public static String hashHex(String input) {
         return hashHex(input.getBytes(StandardCharsets.UTF_8));
     }
 
-    /** 对字节数组计算 Keccak-256（海绵构造：先按 RATE 分块吸收再挤压出 32 字节摘要） */
+    /**
+     * 对字节数组计算 Keccak-256（海绵构造：先按 RATE 分块吸收再挤压出 32 字节摘要）。
+     *
+     * @param input 原始字节，不能为 null（空数组合法）
+     * @return 64 位小写十六进制摘要
+     */
     public static String hashHex(byte[] input) {
         // 海绵吸收前的填充：补齐到 RATE 的整数倍；末字节补 0x80 是 Keccak 域分隔符，
         // 紧邻输入末尾补 0x01 与 SHA-3 的 0x06 相对，用来区分两种填充规格。
@@ -83,7 +111,14 @@ public final class Keccak256 {
         return hex.toString();
     }
 
-    /** Keccak-f[1600] 主置换：24 轮，每轮依次执行 θ/ρ/π/χ/ι 五步 */
+    /**
+     * Keccak-f[1600] 主置换：24 轮，每轮依次执行 θ/ρ/π/χ/ι 五步。
+     *
+     * 状态数组按 {@code a[x + 5*y]} 线性存放（x 为列、y 为行），与 ROTATION 的下标约定一致；
+     * 该置换原地修改入参数组，调用方不应复用置换前的值。
+     *
+     * @param a 25 个 64 位 lane 组成的状态数组
+     */
     private static void permute(long[] a) {
         long[] c = new long[5];
         long[] b = new long[25];
@@ -115,7 +150,16 @@ public final class Keccak256 {
         }
     }
 
-    /** 64 位循环左移；bits 先对 64 取模，0 位直接返回原值（避免移位溢出语义） */
+    /**
+     * 64 位循环左移。
+     *
+     * bits 先对 64 取模，0 位直接返回原值（Java 的移位运算本身会取模，但显式处理可避免
+     * {@code 64 - 0 = 64} 这种非法移位语义带来的歧义）。
+     *
+     * @param value 待移位值
+     * @param bits  左移位数，可为任意整数
+     * @return 循环左移后的值
+     */
     private static long rotl(long value, int bits) {
         int n = bits & 63;
         return n == 0 ? value : (value << n) | (value >>> (64 - n));

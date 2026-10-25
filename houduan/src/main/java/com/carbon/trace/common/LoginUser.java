@@ -11,6 +11,9 @@ import lombok.NoArgsConstructor;
  * auditor 审核端 / regulator 监管端 / admin 管理员）；enterpriseId 归属企业编号
  * （企业端用于数据隔离）；orgId 归属机构编号（审核端 / 监管端使用）。
  * 本对象存于 UserContext（ThreadLocal），随请求全程传递。
+ *
+ * 安全边界：字段值全部来自服务端已验签的 JWT，属于可信数据；禁止用请求参数构造本对象，
+ * 否则会绕过数据隔离（enterpriseId 决定企业端可见的数据范围）。
  */
 @Data
 @NoArgsConstructor

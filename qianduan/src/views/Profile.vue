@@ -1,6 +1,7 @@
 <!--
   Profile.vue —— 个人中心
   用途：登录用户管理个人资料、修改登录密码、更换绑定手机号以及配置账号偏好设置。
+  路由：/profile（Layout 子路由，企业端/审核端/监管端/管理员均可访问）。
   左侧展示用户信息卡（头像/角色/所属机构/注册时间），右侧为四个功能标签页。
 -->
 <template>
@@ -16,6 +17,7 @@
       <el-col :span="8" class="profile-col-left">
         <div class="profile-card panel">
           <div class="avatar-wrap">
+            <!-- 头像 + 相机按钮：按钮绝对定位在头像右下角，无头像时回退默认图标 -->
             <el-avatar :size="84" :src="profile.avatar || undefined" :icon="UserFilled" class="big-avatar" />
             <el-button class="avatar-btn" size="small" circle :loading="uploadingAvatar" @click="changeAvatar">
               <el-icon><Camera /></el-icon>
@@ -123,6 +125,7 @@
                 <el-form-item label="新密码" prop="newPassword">
                   <el-input v-model="pwdForm.newPassword" type="password" placeholder="8-20位，含字母和数字" show-password />
                 </el-form-item>
+                <!-- 密码强度：三段指示条与文案均由新密码实时计算 -->
                 <el-form-item label="密码强度">
                   <div class="strength-bar">
                     <div
@@ -162,6 +165,7 @@
                 <el-form-item label="新手机号" prop="phone">
                   <el-input v-model="phoneForm.phone" placeholder="请输入新手机号" maxlength="11" />
                 </el-form-item>
+                <!-- 验证码：倒计时期间按钮禁用，手机号为空时也不可点击 -->
                 <el-form-item label="验证码" prop="code">
                   <div class="code-row">
                     <el-input v-model="phoneForm.code" placeholder="请输入6位验证码" maxlength="6" />
@@ -186,6 +190,7 @@
                 <span class="tab-label"><el-icon><Setting /></el-icon> 账号设置</span>
               </template>
               <div class="tab-form settings-list">
+                <!-- 设置项：标题 + 说明 + 右侧开关，最终统一提交保存 -->
                 <div class="setting-item" v-for="item in settings" :key="item.key">
                   <div class="setting-text">
                     <div class="s-title">{{ item.title }}</div>
@@ -221,6 +226,7 @@ import { useUserStore } from '@/store'
 import { getMyProfile, updateUser, changeUserPassword, getUserSettings, updateUserSettings } from '@/api/user'
 // 头像上传接口
 import { uploadAvatar } from '@/api/file'
+// 企业与审核机构列表：仅用于把用户记录中的 ID 解析成可读的机构名称
 import { getEnterprises } from '@/api/enterprise'
 import { getAuditOrganizations } from '@/api/auditOrg'
 // 引入设备检测：手机端为标签页附加横向滚动样式（左右分栏堆叠由全局样式处理）
@@ -237,6 +243,7 @@ const profile = ref({})
 // 企业列表与审核机构列表（用于展示所属机构名称）
 const enterprises = ref([])
 const auditOrganizations = ref([])
+// 当前用户角色：决定「企业/机构」字段的图标与文案
 const role = computed(() => userStore.role)
 
 // 所属机构名称：企业用户取企业名，审核员取审核机构名，其余默认监管机构
@@ -252,6 +259,7 @@ const orgName = computed(() => {
 
 // 初始化：加载企业/机构列表、当前用户记录与账号设置
 async function load() {
+  // 企业/机构列表互不依赖，并行拉取以缩短首屏等待
   const [ents, orgs] = await Promise.all([
     getEnterprises(),
     getAuditOrganizations()
@@ -274,6 +282,7 @@ const infoForm = reactive({
   email: userStore.user?.email || '',
   signature: userStore.user?.signature || ''
 })
+// 个人资料校验：姓名必填，邮箱选填但填写时需符合格式
 const infoRules = {
   name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
   email: [{ type: 'email', message: '邮箱格式不正确', trigger: 'blur' }]
@@ -333,6 +342,7 @@ function changeAvatar() {
 async function onAvatarChange(e) {
   const file = e.target.files && e.target.files[0]
   if (!file) return
+  // 仅接受图片类型，避免把非图片文件上传到头像接口
   if (!file.type.startsWith('image/')) {
     ElMessage.warning('请选择图片文件')
     e.target.value = ''
@@ -349,6 +359,7 @@ async function onAvatarChange(e) {
     // 错误提示由请求拦截器统一处理
   } finally {
     uploadingAvatar.value = false
+    // 清空文件框，保证下次选择同一张图片仍能触发 change
     e.target.value = ''
   }
 }
@@ -377,13 +388,14 @@ const validateConfirmPwd = (rule, value, callback) => {
   else if (value !== pwdForm.newPassword) callback(new Error('两次输入的密码不一致'))
   else callback()
 }
+// 密码表单校验：旧密码必填；新密码走自定义复杂度校验；确认密码与新密码联动
 const pwdRules = {
   oldPassword: [{ required: true, message: '请输入当前密码', trigger: 'blur' }],
   newPassword: [{ required: true, validator: validateNewPwd, trigger: 'blur' }],
   confirmPassword: [{ required: true, validator: validateConfirmPwd, trigger: 'blur' }]
 }
 
-// 密码强度
+// 密码强度（0-3 级）：非空即 1 级，长度 ≥10 加 1 级，同时含大小写与符号再加 1 级
 const strengthLevel = computed(() => {
   const p = pwdForm.newPassword
   if (!p) return 0
@@ -426,6 +438,7 @@ const phoneFormRef = ref()
 const phoneForm = reactive({ phone: '', code: '' })
 // 验证码倒计时秒数
 const countdown = ref(0)
+// 倒计时定时器句柄
 let timer = null
 
 // 脱敏显示当前手机号（中间四位替换为 *）
@@ -434,6 +447,7 @@ const maskedPhone = computed(() => {
   return p ? p.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2') : '未绑定'
 })
 
+// 手机号表单校验：11 位大陆手机号；验证码为 6 位数字
 const phoneRules = {
   phone: [
     { required: true, message: '请输入新手机号', trigger: 'blur' },
@@ -541,6 +555,7 @@ async function saveSettings() {
 .profile-panel {
   width: 100%;
 }
+/* 头像容器：宽度锁定为头像尺寸，供相机按钮绝对定位 */
 .avatar-wrap {
   position: relative;
   width: 84px;
@@ -550,15 +565,18 @@ async function saveSettings() {
 .avatar-input {
   display: none;
 }
+/* 无头像时的默认底色 */
 .big-avatar {
   background: linear-gradient(135deg, #10b981, #0ea5e9);
 }
+/* 相机按钮：叠在头像右下角，白色描边与卡片背景分隔 */
 .avatar-btn {
   position: absolute;
   right: -6px;
   bottom: 0;
   border: 2px solid #fff;
 }
+/* 姓名与角色标签 */
 .p-name {
   margin: 14px 0 10px;
   font-size: 19px;
@@ -568,10 +586,11 @@ async function saveSettings() {
   justify-content: center;
   gap: 6px;
 }
+/* 资料元信息列表：整体左对齐，抵消卡片的居中文本 */
 .meta-list {
   text-align: left;
 }
-/* 信息列表：字号 13px → 23px（加大 10px），并通过行高加大行距 */
+/* 信息列表：字号 15px，配合 1.8 行高拉开各行间距 */
 .meta-item {
   display: flex;
   align-items: center;
@@ -590,6 +609,7 @@ async function saveSettings() {
 .meta-item .m-value {
   color: #334155;
 }
+/* 机构名称过长时单行省略，避免撑破卡片宽度 */
 .ellipsis {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -673,12 +693,13 @@ async function saveSettings() {
   right: 12px;
   bottom: 6px;
 }
+/* 角色不可修改的辅助说明 */
 .readonly-tip {
   font-size: 12px;
   color: #94a3b8;
   margin-left: 10px;
 }
-/* 表单底部按钮组：靠右对齐，主次按钮间距 12px */
+/* 表单底部按钮组：水平居中，主次按钮间距 12px */
 .form-actions :deep(.el-form-item__content) {
   justify-content: center;
   gap: 12px;
@@ -693,7 +714,7 @@ async function saveSettings() {
   box-shadow: 0 2px 6px rgba(16, 185, 129, .25);
 }
 
-/* 密码强度 */
+/* 密码强度：三段等宽色块，按 weak / medium / strong 着色 */
 .strength-bar {
   display: flex;
   gap: 6px;
@@ -713,7 +734,7 @@ async function saveSettings() {
   color: #64748b;
 }
 
-/* 验证码 */
+/* 验证码：输入框自适应，按钮固定宽度避免被压缩 */
 .code-row {
   display: flex;
   gap: 10px;
@@ -724,7 +745,7 @@ async function saveSettings() {
   width: 130px;
 }
 
-/* 账号设置 */
+/* 账号设置：开关列表沿用表单宽度，底部为保存操作 */
 .settings-list {
   max-width: 600px;
 }
@@ -750,6 +771,7 @@ async function saveSettings() {
 }
 
 /* 手机端：左右两栏改为上下堆叠，并收紧留白保证输入框可用宽度 */
+/* 移动端断点 ≤767px（与 useDevice 的移动端判定一致） */
 @media (max-width: 767px) {
   .profile-col-left,
   .profile-col-right {

@@ -1,6 +1,7 @@
 <!--
   Layout.vue —— 后台主框架布局
   用途：登录后各角色（企业端/审核端/监管端/管理员）共用的整体布局。
+  路由：作为 / 下各角色后台页面的父布局，默认重定向 /enterprise/home。
   桌面端：左侧可折叠侧边栏 + 顶部面包屑 + 内容区；
   移动端：顶部精简 AppBar + 抽屉式菜单 + 底部标签栏，页面结构单独渲染。
 -->
@@ -9,16 +10,19 @@
     <!-- ============ 桌面端：左侧侧边栏 ============ -->
     <aside v-if="!isMobile" class="sidebar" :class="{ collapsed }">
       <div class="sidebar-header">
+        <!-- 品牌标识：折叠后仅保留链形图标，文字随之隐藏 -->
         <div class="logo">
           <el-icon :size="22"><Connection /></el-icon>
           <span v-show="!collapsed" class="logo-text">碳链通</span>
         </div>
+        <!-- 折叠开关：图标随折叠状态在 Fold / Expand 间切换 -->
         <el-icon class="collapse-btn" @click="collapsed = !collapsed">
           <Fold v-if="!collapsed" />
           <Expand v-else />
         </el-icon>
       </div>
 
+      <!-- 菜单：开启 router 模式后 index 即路由路径，点击由 vue-router 接管跳转 -->
       <el-menu
         :default-active="activeMenu"
         :collapse="collapsed"
@@ -35,6 +39,7 @@
         </el-menu-item>
       </el-menu>
 
+      <!-- 侧边栏底部：联盟链出块状态（区块数由定时轮询刷新） -->
       <div class="sidebar-footer" v-show="!collapsed">
         <div class="chain-status">
           <span class="dot"></span>
@@ -48,6 +53,7 @@
       <!-- 桌面端顶部栏：面包屑 + 链状态 + 用户菜单 -->
       <header v-if="!isMobile" class="topbar">
         <div class="topbar-left">
+          <!-- 面包屑：门户首页（可点击返回）/ 当前页面标题 -->
           <el-breadcrumb separator="/">
             <el-breadcrumb-item :to="{ path: homePath }">{{ portalTitle }}</el-breadcrumb-item>
             <el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item>
@@ -55,12 +61,14 @@
         </div>
 
         <div class="topbar-right">
+          <!-- 区块链状态徽标：数字为当前区块高度，超出 999 以 999+ 显示 -->
           <el-tooltip content="区块链状态正常">
             <el-badge :value="blockCount" :max="999" class="chain-badge">
               <el-icon :size="20" color="#10b981"><Link /></el-icon>
             </el-badge>
           </el-tooltip>
 
+          <!-- 用户下拉：展示姓名与角色，菜单项由 handleCommand 统一处理 -->
           <el-dropdown @command="handleCommand">
             <div class="user-info">
               <el-avatar :size="32" :icon="UserFilled" />
@@ -82,8 +90,11 @@
 
       <!-- 移动端顶部栏：菜单按钮 + 页面标题 + 链状态/账号 -->
       <header v-else class="mobile-topbar">
+        <!-- 菜单按钮：打开包含全部菜单项的抽屉 -->
         <el-icon class="mobile-icon-btn" :size="22" @click="drawerVisible = true"><MenuIcon /></el-icon>
+        <!-- 标题优先取当前页 meta.title，缺失时回退门户名 -->
         <span class="mobile-title">{{ currentTitle || portalTitle }}</span>
+        <!-- 右侧操作：区块徽标 + 头像下拉（复用桌面端的命令处理） -->
         <div class="mobile-actions">
           <el-badge :value="blockCount" :max="999">
             <el-icon :size="18" color="#10b981"><Link /></el-icon>
@@ -121,6 +132,7 @@
           <el-icon :size="20"><component :is="item.icon" /></el-icon>
           <span class="tab-text">{{ item.short }}</span>
         </div>
+        <!-- “更多”：固定第 5 项，打开抽屉查看未放进底栏的其余菜单项 -->
         <div class="tab-item" :class="{ active: drawerVisible }" @click="drawerVisible = true">
           <el-icon :size="20"><MenuIcon /></el-icon>
           <span class="tab-text">更多</span>
@@ -138,6 +150,7 @@
       class="mobile-drawer"
     >
       <div class="drawer-inner">
+        <!-- 抽屉头部：品牌标识与当前门户名称 -->
         <div class="drawer-brand">
           <div class="drawer-logo"><el-icon :size="20"><Connection /></el-icon></div>
           <div>
@@ -161,6 +174,7 @@
           </el-menu-item>
         </el-menu>
 
+        <!-- 抽屉底部：链状态 + 当前登录用户身份 -->
         <div class="drawer-footer">
           <div class="chain-status">
             <span class="dot"></span>
@@ -202,20 +216,25 @@ const userStore = useUserStore()
 const collapsed = ref(false)
 // 移动端抽屉菜单开关
 const drawerVisible = ref(false)
-// 设备类型
+// 设备类型：断点由 useDevice 统一维护（视口 ≤767px），命中后整页切换为独立的移动端结构
 const { isMobile } = useDevice()
 // 区块链区块数量
 const blockCount = ref(0)
 
 // ============ 数据自动刷新（定时轮询）============
+// 区块高度需要保持"实时"观感，故固定 15 秒轮询一次；
+// 轮询只递增全局刷新信号，具体页面数据由各自注册的加载函数响应，布局本身不重复拉取业务数据。
 const REFRESH_INTERVAL = 15000
+// 轮询定时器句柄（组件卸载时清理，避免路由切走后仍在后台执行）
 let refreshTimer = null
 
+// 卸载前清除定时器
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = null
 })
 
+// 挂载：先取一次区块高度，再启动定时轮询
 onMounted(async () => {
   try {
     const stats = await getBlockchainStats()
@@ -224,6 +243,7 @@ onMounted(async () => {
     blockCount.value = 0
   }
   refreshTimer = setInterval(() => {
+    // 标签页处于后台时跳过本次刷新，减少无意义请求
     if (document.hidden) return
     refreshTick.value++
   }, REFRESH_INTERVAL)
@@ -325,6 +345,7 @@ function handleCommand(cmd) {
   width: 64px;
 }
 
+/* 侧边栏头部：品牌与折叠按钮，高度与右侧顶栏对齐 */
 .sidebar-header {
   height: 60px;
   display: flex;
@@ -355,6 +376,7 @@ function handleCommand(cmd) {
   color: #fff;
 }
 
+/* 菜单撑满剩余高度，去掉 Element 默认的右侧边框 */
 .sidebar :deep(.el-menu) {
   border-right: none;
   flex: 1;
@@ -474,6 +496,7 @@ function handleCommand(cmd) {
 }
 
 /* ============ 移动端布局（独立设计：碳账本 / 精密仪表） ============ */
+/* 无媒体查询：由 isMobile（视口 ≤767px）直接切换类名，桌面与移动端结构互斥渲染 */
 .layout-mobile {
   flex-direction: column;
   height: 100vh;
@@ -511,6 +534,7 @@ function handleCommand(cmd) {
 .mobile-icon-btn:active {
   background: rgba(7, 26, 22, 0.06);
 }
+/* 页面标题：占满中间空间，超长时单行省略，避免挤压右侧操作区 */
 .mobile-title {
   flex: 1;
   font-size: 16px;
@@ -521,6 +545,7 @@ function handleCommand(cmd) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 右侧操作区：区块徽标与头像保持 12px 间距 */
 .mobile-actions {
   display: flex;
   align-items: center;
@@ -623,6 +648,7 @@ function handleCommand(cmd) {
     radial-gradient(120% 45% at 100% 0, rgba(200, 241, 105, 0.1), transparent 55%),
     #071a16;
 }
+/* 抽屉品牌区：顶部留白大于底部，形成"封面"观感 */
 .drawer-brand {
   display: flex;
   align-items: center;
@@ -685,6 +711,7 @@ function handleCommand(cmd) {
 .drawer-inner :deep(.el-menu-item.is-active)::before {
   color: var(--m-signal, #c8f169);
 }
+/* 抽屉底部：底部内边距额外叠加安全区，适配全面屏手势条 */
 .drawer-footer {
   padding: 16px 18px calc(18px + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255, 255, 255, 0.06);

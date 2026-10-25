@@ -2,6 +2,13 @@
   Alerts.vue —— 异常告警页
   用途：展示系统自动监测出的碳排放数据异常告警（高危/中危/低危），
   提供告警列表的状态筛选、详情查看与标记处理功能。
+  路由：/regulator/alerts（name: Alerts，roles: regulator / admin）
+  依赖接口：@/api/alert 的 getAlerts（支持 level/status 参数，本页取全量后在前端筛选）、
+           resolveAlert（PUT /alerts/{id}/resolve，把 pending 置为 resolved）
+  字段口径：level = high / medium / low；status = pending / resolved；
+           告警由链上合规判定产生，type 取 data_anomaly（数据异常）/ factor_mismatch（因子不匹配）/
+           late_report（迟报）/ chain_failed（链上同步失败），typeLabel 为后端返回的中文类型名，
+           与 message 一起构成本次判定结果的文案快照（本页不再单独存储快照字段）。
 -->
 <template>
   <div class="page-container">
@@ -12,6 +19,7 @@
     </div>
 
     <!-- 顶部统计卡片：高危 / 中危 / 低危 / 待处理（点击卡片筛选下方列表） -->
+    <!-- 前三张卡片控制级别筛选 levelFilter，“待处理”卡片控制状态筛选 statusFilter，两个维度可叠加 -->
     <el-row :gutter="16" class="mb-16">
       <el-col :span="6" v-for="s in stats" :key="s.label">
         <div
@@ -26,6 +34,7 @@
     </el-row>
 
     <!-- 告警列表面板：含状态筛选与表格 -->
+    <!-- 状态单选与“待处理”统计卡片绑定同一个 statusFilter，二者选中态保持同步 -->
     <div class="panel">
       <div class="panel-header">
         <span class="title">告警列表</span>
@@ -64,6 +73,7 @@
         </div>
 
         <!-- 告警表格：级别/类型/企业/报告期/内容/时间/状态/操作 -->
+        <!-- 桌面端表格（>767px）：级别用标签着色，仅 pending 状态显示“处理”按钮 -->
         <el-table v-else :data="filteredAlerts" stripe v-loading="loading">
           <el-table-column label="级别" min-width="90" align="center">
             <template #default="{ row }">
@@ -93,6 +103,7 @@
     </div>
 
     <!-- 告警详情对话框：头部级别标识 + 描述列表 + 处理建议 -->
+    <!-- 详情直接复用列表行数据（current），不再单独请求接口；仅 pending 告警提供“标记已处理” -->
     <el-dialog v-model="showDetail" title="告警详情" width="520px">
       <!-- 内容区：手机端限制高度并允许滚动，保证详情可完整查看 -->
       <div v-if="current" :style="isMobile ? { maxHeight: '60vh', overflowY: 'auto' } : null">
@@ -118,6 +129,7 @@
         </div>
       </div>
       <template #footer>
+        <!-- 关闭仅收起弹窗；“标记已处理”同时完成处理并关闭，避免重复进入详情 -->
         <el-button @click="showDetail = false">关闭</el-button>
         <el-button v-if="current?.status === 'pending'" type="primary" @click="resolve(current); showDetail = false">标记已处理</el-button>
       </template>
@@ -140,7 +152,8 @@ import { useDevice } from '@/composables/useDevice'
 // 设备类型（手机端切换为卡片列表）
 const { isMobile } = useDevice()
 
-// 告警列表
+// 告警列表（接口一次返回全量，级别/状态筛选均在前端完成）
+// 行字段：level、status、type、typeLabel、message、period、enterpriseName、createdAt
 const alerts = ref([])
 // 列表加载态
 const loading = ref(false)
@@ -150,6 +163,7 @@ const levelFilter = ref('')
 const statusFilter = ref('')
 
 // 按级别与状态筛选后的告警列表（两个维度叠加生效）
+// 统计卡片设置的 levelFilter / statusFilter 与列表共用同一份数据，因此计数始终为全量口径
 const filteredAlerts = computed(() =>
   alerts.value.filter(a =>
     (!levelFilter.value || a.level === levelFilter.value) &&
@@ -204,6 +218,7 @@ async function load() {
 }
 
 // 标记告警为已处理（调用后端接口后刷新列表）
+// 后端把 status 由 pending 改为 resolved；处理后该行不再显示“处理”按钮
 async function resolve(row) {
   await resolveAlert(row.id)
   ElMessage.success('告警已标记为处理')
@@ -223,6 +238,8 @@ useAutoRefresh(load)
 </script>
 
 <style scoped>
+/* ===== 桌面端（>767px）：基础样式，本页无 scoped 断点规则 ===== */
+/* ===== 移动端（≤767px）：由 isMobile 切换卡片列表与弹窗滚动高度，卡片外观来自全局 mobile.css ===== */
 /* 统计卡片标签颜色：按告警级别/状态区分 */
 .stat-card.danger .label { color: #ef4444; }
 .stat-card.warning .label { color: #f59e0b; }
