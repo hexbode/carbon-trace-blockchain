@@ -38,6 +38,10 @@ carbon:
   # 上传文件保存目录（相对后端项目根目录），通过 /uploads/** 对外访问
   upload:
     dir: ./uploads
+  # 跨域来源白名单（逗号分隔）。默认留空＝不放行任何跨域来源（前后端同域部署，推荐）。
+  # 仅在需要独立域名访问时才配置，例如：CARBON_CORS_ALLOWED_ORIGINS=https://a.example.com
+  cors:
+    allowed-origins: ${CARBON_CORS_ALLOWED_ORIGINS:}
   # ============================================================
   # 区块链层：FISCO BCOS + WeBASE + Solidity 智能合约
   #
