@@ -56,13 +56,14 @@
 
     <!-- 企业碳排放详情抽屉 -->
     <el-drawer v-model="showDetail" title="企业碳排放详情" size="600px">
-      <div v-if="detail">
+      <!-- 详情内容：手机端限制高度并允许滚动，保证企业信息与认证记录可完整查看 -->
+      <div v-if="detail" :style="isMobile ? { maxHeight: '76vh', overflowY: 'auto', paddingRight: '4px' } : null">
         <div class="detail-header">
           <h2>{{ detail.name }}</h2>
           <p>{{ detail.industry }} · {{ detail.scope }}</p>
         </div>
-        <!-- 企业基本信息 -->
-        <el-descriptions :column="2" border>
+        <!-- 企业基本信息：手机端单列展示，避免字段被挤压 -->
+        <el-descriptions :column="isMobile ? 1 : 2" border>
           <el-descriptions-item label="统一社会信用代码">{{ detail.creditCode }}</el-descriptions-item>
           <el-descriptions-item label="联系人">{{ detail.contact }}</el-descriptions-item>
           <el-descriptions-item label="联系电话">{{ detail.phone }}</el-descriptions-item>
@@ -78,9 +79,22 @@
           <el-col :span="8"><div class="mini-stat orange"><div class="v">{{ detail.pending }}</div><div class="l">待审核 (条)</div></div></el-col>
         </el-row>
 
-        <!-- 认证记录明细表 -->
+        <!-- 认证记录明细：手机端用卡片列表，桌面端用表格 -->
         <h3 class="section-title">认证记录</h3>
-        <el-table :data="detail.certList" size="small">
+        <div v-if="isMobile" class="m-list">
+          <el-empty v-if="!detail.certList.length" description="暂无认证记录" :image-size="60" />
+          <div v-for="row in detail.certList" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.id }}</span>
+              <el-tag :type="row.status === 'revoked' ? 'danger' : 'success'" size="small">
+                {{ row.status === 'revoked' ? '已撤销' : '有效' }}
+              </el-tag>
+            </div>
+            <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight: 600">{{ row.amount }} tCO₂</span></div>
+          </div>
+        </div>
+        <el-table v-else :data="detail.certList" size="small">
           <el-table-column prop="id" label="认证编号" min-width="120" />
           <el-table-column prop="period" label="报告日期" min-width="100" />
           <el-table-column label="排放量" min-width="110" align="right">
@@ -105,6 +119,11 @@ import { ref, computed, onMounted } from 'vue'
 // 公共企业 / 排放概览接口；认证明细接口（登录态下可用）
 import { getPublicEnterprises, getPublicEnterpriseEmissions } from '@/api/publicApi'
 import { getCertifications } from '@/api/certification'
+// 引入设备检测：手机端认证记录改用卡片列表
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换列表与详情展示方式）
+const { isMobile } = useDevice()
 
 // ===== 状态 =====
 const keyword = ref('')       // 搜索关键字
@@ -198,4 +217,19 @@ onMounted(async () => {
 .mini-stat.green .v { color: #10b981; }
 .mini-stat.orange .v { color: #f59e0b; }
 .mini-stat .l { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+
+@media (max-width: 767px) {
+  /* 标题与留白收紧，避免超大标题在窄屏溢出 */
+  .hero { margin-bottom: 18px; }
+  .hero h1 { font-size: 22px; }
+  .hero p { font-size: 13px; line-height: 1.6; }
+  .search-box { padding: 14px; }
+  /* 企业卡片：手机端单列，避免 320px 最小列宽撑出横向滚动 */
+  .enterprise-list { grid-template-columns: 1fr; }
+  .ent-card { padding: 16px; }
+  .ent-header { flex-wrap: wrap; }
+  /* 详情标题长文本换行 */
+  .detail-header h2 { font-size: 18px; word-break: break-all; }
+  .detail-header p { word-break: break-all; }
+}
 </style>

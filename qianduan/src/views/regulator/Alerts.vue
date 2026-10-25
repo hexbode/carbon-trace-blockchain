@@ -36,8 +36,35 @@
         </el-radio-group>
       </div>
       <div class="panel-body" style="padding: 0">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!filteredAlerts.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in filteredAlerts" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.enterpriseName }}</span>
+              <el-tag :type="levelType(row.level)" size="small" effect="dark">{{ levelLabel(row.level) }}</el-tag>
+            </div>
+            <div class="m-card-sub">{{ row.typeLabel }}</div>
+            <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">告警内容</span><span class="m-val">{{ row.message }}</span></div>
+            <div class="m-row"><span class="m-key">触发时间</span><span class="m-val">{{ row.createdAt || '-' }}</span></div>
+            <div class="m-row">
+              <span class="m-key">状态</span>
+              <span class="m-val">
+                <el-tag :type="row.status === 'resolved' ? 'success' : 'warning'" size="small">
+                  {{ row.status === 'resolved' ? '已处理' : '待处理' }}
+                </el-tag>
+              </span>
+            </div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="viewAlert(row)">详情</el-button>
+              <el-button v-if="row.status === 'pending'" text type="success" size="small" @click="resolve(row)">处理</el-button>
+            </div>
+          </div>
+        </div>
+
         <!-- 告警表格：级别/类型/企业/报告期/内容/时间/状态/操作 -->
-        <el-table :data="filteredAlerts" stripe v-loading="loading">
+        <el-table v-else :data="filteredAlerts" stripe v-loading="loading">
           <el-table-column label="级别" min-width="90" align="center">
             <template #default="{ row }">
               <el-tag :type="levelType(row.level)" size="small" effect="dark">{{ levelLabel(row.level) }}</el-tag>
@@ -67,7 +94,8 @@
 
     <!-- 告警详情对话框：头部级别标识 + 描述列表 + 处理建议 -->
     <el-dialog v-model="showDetail" title="告警详情" width="520px">
-      <div v-if="current">
+      <!-- 内容区：手机端限制高度并允许滚动，保证详情可完整查看 -->
+      <div v-if="current" :style="isMobile ? { maxHeight: '60vh', overflowY: 'auto' } : null">
         <div class="alert-detail-header" :class="current.level">
           <el-icon :size="32"><WarningFilled /></el-icon>
           <div>
@@ -106,6 +134,11 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 // 导入告警接口
 import { getAlerts, resolveAlert } from '@/api/alert'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 告警列表
 const alerts = ref([])

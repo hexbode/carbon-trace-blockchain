@@ -33,7 +33,32 @@
     <!-- 因子列表表格：展示排放源、类别、因子值、参考标准、更新时间、状态及操作按钮 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
-        <el-table :data="filtered" stripe v-loading="loading">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!filtered.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in filtered" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.source }}</span>
+              <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag>
+            </div>
+            <div class="m-card-sub">{{ row.category }}</div>
+            <div class="m-row">
+              <span class="m-key">排放因子</span>
+              <span class="m-val m-val-inline">
+                <span class="text-primary" style="font-weight:600">{{ row.factor }}</span>
+                <span class="m-unit">{{ row.unit }}</span>
+              </span>
+            </div>
+            <div class="m-row"><span class="m-key">参考标准</span><span class="m-val">{{ row.standard || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">更新时间</span><span class="m-val">{{ row.updatedAt || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="openForm(row)">编辑</el-button>
+              <el-button text :type="row.status === 'active' ? 'warning' : 'success'" size="small" @click="toggle(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="source" label="排放源名称" min-width="120" align="center" />
           <el-table-column prop="category" label="类别" min-width="150" align="center" />
           <el-table-column label="排放因子" min-width="140" >
@@ -56,19 +81,25 @@
 
     <!-- 新增/编辑因子对话框：根据 form.id 是否存在切换标题 -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑排放因子' : '新增排放因子'" width="520px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
-        <el-form-item label="排放源名称" prop="source"><el-input v-model="form.source" /></el-form-item>
-        <el-form-item label="类别" prop="category">
-          <el-select v-model="form.category" style="width:100%">
-            <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="排放因子" prop="factor">
-          <el-input-number v-model="form.factor" :precision="4" :step="0.0001" :min="0" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="单位" prop="unit"><el-input v-model="form.unit" placeholder="如 tCO₂/t" /></el-form-item>
-        <el-form-item label="参考标准" prop="standard"><el-input v-model="form.standard" /></el-form-item>
-      </el-form>
+      <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
+          <el-form-item label="排放源名称" prop="source"><el-input v-model="form.source" /></el-form-item>
+          <el-form-item label="类别" prop="category">
+            <el-select v-model="form.category" style="width:100%">
+              <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="排放因子" prop="factor">
+            <el-input-number v-model="form.factor" :precision="4" :step="0.0001" :min="0" style="width:100%" />
+          </el-form-item>
+          <el-form-item label="单位" prop="unit">
+            <el-select v-model="form.unit" placeholder="请选择单位" style="width:100%">
+              <el-option v-for="u in unitOptions" :key="u" :label="u" :value="u" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="参考标准" prop="standard"><el-input v-model="form.standard" /></el-form-item>
+        </el-form>
+      </div>
       <template #footer>
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submit" :loading="submitting">保存</el-button>
@@ -86,6 +117,11 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 // 引入碳排放因子接口
 import { getEmissionFactors, createEmissionFactor, updateEmissionFactor } from '@/api/factor'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 因子列表
 const factors = ref([])
@@ -109,12 +145,20 @@ const formRef = ref()
 const submitting = ref(false)
 // 表单响应式状态：id 为空表示新增
 const form = reactive({ id: null, source: '', category: '', factor: 0, unit: '', standard: '' })
+// 排放因子单位预设值：与因子库现有口径保持一致，避免手工输入产生不一致的单位
+const UNIT_OPTIONS = ['tCO₂/t', 'tCO₂/GJ', 'tCO₂/MWh', 'tCO₂/万m³']
+// 单位下拉选项：编辑历史数据时若单位不在预设列表中，临时补充显示，避免下拉框显示为空
+const unitOptions = computed(() => {
+  const list = [...UNIT_OPTIONS]
+  if (form.unit && !list.includes(form.unit)) list.push(form.unit)
+  return list
+})
 // 表单校验规则：必填字段
 const rules = {
   source: [{ required: true, message: '请输入排放源名称', trigger: 'blur' }],
   category: [{ required: true, message: '请选择类别', trigger: 'change' }],
   factor: [{ required: true, message: '请输入排放因子', trigger: 'blur' }],
-  unit: [{ required: true, message: '请输入单位', trigger: 'blur' }]
+  unit: [{ required: true, message: '请选择单位', trigger: 'change' }]
 }
 
 // 拉取因子列表

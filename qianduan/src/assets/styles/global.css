@@ -197,6 +197,7 @@ html, body {
   padding-left: 32px;
   padding-bottom: 24px;
 }
+
 /* 时间轴竖线（除最后一项外）*/
 .block-chain-item::before {
   content: '';
@@ -225,4 +226,210 @@ html, body {
   color: #fff;
   font-size: 12px;
   font-weight: 600;
+}
+
+/* ============================================================
+   移动端（手机）通用适配
+   布局框架（侧边栏/底部导航）由 Layout.vue 单独渲染，
+   这里只处理各业务页面在窄屏下的通用排版：
+   栅格堆叠、表单标签置顶、表格横向滚动、对话框接近全屏等。
+   ============================================================ */
+@media (max-width: 767px) {
+  /* ---- 页面容器与标题 ---- */
+  .page-container {
+    padding: 12px;
+  }
+  .page-header {
+    margin-bottom: 14px;
+  }
+  .page-header h2 {
+    font-size: 18px;
+  }
+  .page-header p {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  /* ---- 栅格：默认单列堆叠 ---- */
+  .el-row {
+    row-gap: 12px;
+  }
+  .el-row > .el-col {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+  /* 指标卡片行保持两列，避免页面过长（:has 不支持时退回单列） */
+  .el-row:has(> .el-col > .stat-card) > .el-col {
+    flex: 0 0 50%;
+    max-width: 50%;
+  }
+
+  .stat-card {
+    padding: 14px;
+  }
+  .stat-card .value {
+    font-size: 22px;
+  }
+
+  /* ---- 面板 ---- */
+  .panel-header {
+    padding: 12px 14px;
+  }
+  .panel-body {
+    padding: 14px;
+  }
+
+  /* ---- 表格：缩小字号，超宽时横向滚动 ---- */
+  .el-table {
+    font-size: 12px;
+  }
+  .el-table .cell {
+    padding: 0 8px;
+  }
+
+  /* ---- 表单：标签置顶，内容占满整行 ---- */
+  .el-form-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .el-form-item__label {
+    width: 100% !important;
+    justify-content: flex-start;
+    text-align: left;
+    padding: 0 0 4px 0 !important;
+    line-height: 1.4;
+  }
+  .el-form-item__content {
+    margin-left: 0 !important;
+  }
+
+  /* ---- 对话框 / 消息框：接近全屏 ---- */
+  .el-dialog {
+    width: 92% !important;
+    margin-top: 6vh !important;
+  }
+  .el-dialog__body {
+    padding: 16px;
+  }
+  .el-message-box {
+    width: 88% !important;
+  }
+
+  /* ---- 工具栏：允许换行 ---- */
+  .flex-between {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* ---- 哈希等长文本 ---- */
+  .hash-text {
+    font-size: 11px;
+  }
+
+  img,
+  video {
+    max-width: 100%;
+  }
+
+  /* ---- 移动端卡片列表：表格在手机端改为卡片展示 ---- */
+  .m-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .m-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .m-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .m-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+  .m-card-sub {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .m-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+    line-height: 1.9;
+  }
+  .m-row .m-key {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .m-row .m-val {
+    color: var(--text-primary);
+    text-align: right;
+    word-break: break-all;
+  }
+  .m-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+  }
+  /* 数值 + 单位：单位使用固定宽度并禁止换行，避免窄屏下单位被拆到下一行或左右跳动 */
+  .m-val-inline {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+  }
+  .m-unit {
+    display: inline-block;
+    min-width: 64px;
+    margin-left: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 400;
+    text-align: left;
+    white-space: nowrap;
+    word-break: keep-all;
+  }
+
+  /* ---- 分页：换行居中，避免窄屏挤出 ---- */
+  .el-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 6px;
+  }
+
+  /* ---- 筛选栏：固定宽度的输入/选择框在手机端占满一行 ---- */
+  .el-form--inline .el-form-item {
+    width: 100%;
+    margin-right: 0;
+  }
+  .el-form--inline .el-form-item__content {
+    width: 100%;
+  }
+  .el-form--inline .el-form-item__content > .el-input,
+  .el-form--inline .el-form-item__content > .el-select,
+  .el-form--inline .el-form-item__content > .el-date-editor {
+    width: 100% !important;
+  }
+
+  /* ---- 抽屉：不超过屏幕宽度 ---- */
+  .el-drawer.ltr,
+  .el-drawer.rtl {
+    max-width: 88vw;
+  }
+  .el-drawer.ttb,
+  .el-drawer.btt {
+    max-height: 88vh;
+  }
 }

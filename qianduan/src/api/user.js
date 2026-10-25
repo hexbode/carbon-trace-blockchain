@@ -5,6 +5,8 @@ import request from '@/utils/request'
 
 // 用户列表（可按 username、role 过滤）
 export const getUsers = (params) => request.get('/users', { params })
+// 当前登录用户的个人资料（个人中心用，任意角色可查本人）
+export const getMyProfile = () => request.get('/users/me')
 // 新增用户
 export const createUser = (data) => request.post('/users', data)
 // 更新用户

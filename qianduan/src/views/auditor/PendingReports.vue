@@ -23,9 +23,37 @@
     <!-- 报告列表面板：通过 Tab 切换 "待审核" 与 "全部报告" -->
     <div class="panel">
       <el-tabs v-model="activeTab">
-        <!-- 待审核标签页：仅展示 status=pending 的报告 -->
+        <!-- 待审核标签页：仅展示 status=pending 的报告（手机端卡片列表，桌面端表格） -->
         <el-tab-pane label="待审核" name="pending">
-          <el-table :data="pendingList" stripe v-loading="loading">
+          <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 4px 12px 12px">
+            <el-empty v-if="!pendingList.length" description="暂无待审核报告" :image-size="70" />
+            <div v-for="row in pendingList" :key="row.id" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.id }}</span>
+                <el-tag type="warning" size="small">{{ statusLabel(row.status) }}</el-tag>
+              </div>
+              <div class="m-row"><span class="m-key">企业</span><span class="m-val">{{ row.enterpriseName }}</span></div>
+              <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+              <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+              <div class="m-row"><span class="m-key">活动数据</span><span class="m-val">{{ row.activityData ?? '-' }} {{ row.activityUnit || '' }}</span></div>
+              <div class="m-row">
+                <span class="m-key">排放因子</span>
+                <span class="m-val m-val-inline">
+                  <span>{{ row.emissionFactor ?? '-' }}</span>
+                  <span class="m-unit">{{ row.unit || '-' }}/单位</span>
+                </span>
+              </div>
+              <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+              <div class="m-row"><span class="m-key">提交人</span><span class="m-val">{{ row.submitter }}</span></div>
+              <div class="m-row"><span class="m-key">提交时间</span><span class="m-val">{{ row.submittedAt }}</span></div>
+              <div class="m-card-actions">
+                <el-button type="primary" size="small" @click="openAudit(row)">审核</el-button>
+                <el-button size="small" type="info" text @click="viewEvidence(row)">凭证</el-button>
+              </div>
+            </div>
+          </div>
+
+          <el-table v-else :data="pendingList" stripe v-loading="loading">
             <el-table-column prop="id" label="报告编号" min-width="150" align="center" />
             <el-table-column prop="enterpriseName" label="企业" min-width="180" show-overflow-tooltip align="center" />
             <el-table-column prop="period" label="报告日期" min-width="130" align="center" />
@@ -44,9 +72,34 @@
             </el-table-column>
           </el-table>
         </el-tab-pane>
-        <!-- 全部报告标签页：展示所有状态的报告，支持状态标签展示 -->
+        <!-- 全部报告标签页：展示所有状态的报告，支持状态标签展示（手机端卡片列表） -->
         <el-tab-pane label="全部报告" name="all">
-          <el-table :data="allList" stripe v-loading="loading">
+          <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 4px 12px 12px">
+            <el-empty v-if="!allList.length" description="暂无报告记录" :image-size="70" />
+            <div v-for="row in allList" :key="row.id" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.id }}</span>
+                <el-tag :type="tagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+              </div>
+              <div class="m-row"><span class="m-key">企业</span><span class="m-val">{{ row.enterpriseName }}</span></div>
+              <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+              <div class="m-row"><span class="m-key">活动数据</span><span class="m-val">{{ row.activityData ?? '-' }} {{ row.activityUnit || '' }}</span></div>
+              <div class="m-row">
+                <span class="m-key">排放因子</span>
+                <span class="m-val m-val-inline">
+                  <span>{{ row.emissionFactor ?? '-' }}</span>
+                  <span class="m-unit">{{ row.unit || '-' }}/单位</span>
+                </span>
+              </div>
+              <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+              <div class="m-row"><span class="m-key">审核人</span><span class="m-val">{{ row.auditor || '-' }}</span></div>
+              <div class="m-card-actions">
+                <el-button text type="primary" size="small" @click="viewDetail(row)">详情</el-button>
+              </div>
+            </div>
+          </div>
+
+          <el-table v-else :data="allList" stripe v-loading="loading">
             <el-table-column prop="id" label="报告编号" min-width="120" />
             <el-table-column prop="enterpriseName" label="企业" min-width="180" show-overflow-tooltip />
             <el-table-column prop="period" label="报告日期" min-width="100" />
@@ -68,13 +121,13 @@
       </el-tabs>
     </div>
 
-    <!-- 审核弹窗：包含报告详情 + 数据凭证 + 审核意见 -->
+    <!-- 审核弹窗：包含报告详情 + 数据凭证 + 审核意见（手机端内容区可滚动，底部按钮保持可达） -->
     <el-dialog v-model="showAudit" title="报告审核" width="760px" top="5vh">
-      <div v-if="current">
+      <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
         <el-tabs v-model="auditTab">
           <!-- 报告详情：以描述列表展示报告关键字段（编号、报告期、活动数据、排放因子、电子防伪码等） -->
           <el-tab-pane label="报告详情" name="detail">
-            <el-descriptions :column="2" border>
+            <el-descriptions :column="isMobile ? 1 : 2" border>
               <el-descriptions-item label="报告编号">{{ current.id }}</el-descriptions-item>
               <el-descriptions-item label="报告日期">{{ current.period }}</el-descriptions-item>
               <el-descriptions-item label="企业">{{ current.enterpriseName }}</el-descriptions-item>
@@ -121,7 +174,7 @@
 
           <!-- 审核意见填写：审核结论、三项评分（数据真实性/核算合规性/因子合理性）及审核意见 -->
           <el-tab-pane label="审核意见" name="opinion">
-            <el-form label-width="100px">
+            <el-form :label-width="isMobile ? 'auto' : '100px'">
               <el-form-item label="审核结论">
                 <el-radio-group v-model="auditResult">
                   <el-radio value="pass">通过认证</el-radio>
@@ -152,9 +205,9 @@
       </template>
     </el-dialog>
 
-    <!-- 数据凭证查看弹窗（列表页"凭证"按钮触发的简化版查看） -->
+    <!-- 数据凭证查看弹窗（列表页"凭证"按钮触发的简化版查看，手机端可滚动） -->
     <el-dialog v-model="showEvidence" title="数据凭证查看" width="560px">
-      <div v-if="current">
+      <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
         <div class="ev-item">
           <div class="ev-label">电子防伪码（链上存证）</div>
           <div class="hash-text" style="background:#f8fafc;padding:10px;border-radius:6px">{{ current.fingerprint }}</div>
@@ -191,6 +244,11 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 // 引入报告记录接口
 import { getReportRecords, auditReport } from '@/api/report'
+// 引入设备检测：手机端渲染卡片列表与可滚动弹窗
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 报告记录原始列表
 const records = ref([])
@@ -290,5 +348,11 @@ useAutoRefresh(load)
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; background: #f1f5f9; border-radius: 6px;
   font-size: 13px; color: #475569;
+}
+/* 手机端弹窗内容区：限制最大高度并允许滚动，保证底部按钮始终可达 */
+.dlg-scroll {
+  max-height: 58vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 </style>

@@ -44,7 +44,40 @@
     <!-- 单位列表：公共列（编号/名称/联系人/电话/时间/状态/操作）+ 各类型专属列 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
-        <el-table :data="filteredList" stripe v-loading="loading">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!filteredList.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in filteredList" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.name }}</span>
+              <el-tag type="success" size="small">正常</el-tag>
+            </div>
+            <div class="m-card-sub">{{ currentType.idLabel }}：{{ row.id }}</div>
+            <!-- 按当前类型展示对应字段 -->
+            <template v-if="activeType === 'enterprise'">
+              <div class="m-row"><span class="m-key">行业</span><span class="m-val">{{ row.industry || '-' }}</span></div>
+              <div class="m-row"><span class="m-key">统一社会信用代码</span><span class="m-val">{{ row.creditCode || '-' }}</span></div>
+            </template>
+            <template v-else-if="activeType === 'auditor'">
+              <div class="m-row"><span class="m-key">资质证书号</span><span class="m-val">{{ row.qualification || '-' }}</span></div>
+              <div class="m-row"><span class="m-key">业务范围</span><span class="m-val">{{ row.scope || '-' }}</span></div>
+            </template>
+            <template v-else>
+              <div class="m-row"><span class="m-key">所属区域</span><span class="m-val">{{ row.region || '-' }}</span></div>
+              <div class="m-row"><span class="m-key">监管职责</span><span class="m-val">{{ row.scope || '-' }}</span></div>
+            </template>
+            <div class="m-row"><span class="m-key">联系人</span><span class="m-val">{{ row.contact || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">联系电话</span><span class="m-val">{{ row.phone || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">注册时间</span><span class="m-val">{{ row.registeredAt || row.createdAt || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="viewDetail(row)">详情</el-button>
+              <el-button text type="primary" size="small" @click="openForm(row)">编辑</el-button>
+              <el-button text type="danger" size="small" @click="remove(row)">删除</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="filteredList" stripe v-loading="loading">
           <el-table-column prop="id" :label="currentType.idLabel" min-width="120" align="center" />
           <el-table-column prop="name" :label="currentType.nameLabel" min-width="180" show-overflow-tooltip align="center" />
           <!-- 企业端专属列 -->
@@ -79,6 +112,8 @@
 
     <!-- 新增/编辑弹窗：类型三选一，字段随类型切换，写入对应的表 -->
     <el-dialog v-model="showForm" :title="(form.id ? '编辑' : '新增') + formUnit" width="600px">
+      <!-- 内容区：手机端限制高度并允许滚动，保证长表单可完整填写 -->
+      <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="130px">
         <el-form-item label="类型">
           <!-- 编辑时不允许改类型，避免记录跨表迁移 -->
@@ -157,6 +192,7 @@
           </el-form-item>
         </template>
       </el-form>
+      </div>
       <template #footer>
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submitForm" :loading="submitting">保存</el-button>
@@ -186,6 +222,11 @@ import { getEnterprises, getEnterpriseIndustries, createEnterprise, updateEnterp
 import { getAuditOrganizations, createAuditOrganization, updateAuditOrganization, deleteAuditOrganization } from '@/api/auditOrg'
 // 监管端接口
 import { getRegulatorOrganizations, createRegulatorOrganization, updateRegulatorOrganization, deleteRegulatorOrganization } from '@/api/regulatorOrg'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // ===== 类型定义 =====
 // 三类单位共用本页：企业端存 enterprises，审核端存 audit_organizations，监管端存 regulator_organizations

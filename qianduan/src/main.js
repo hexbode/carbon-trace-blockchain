@@ -28,6 +28,8 @@ import App from './App.vue'
 import router from './router/index.js'
 // 引入全局样式表，定义通用样式与基础重置
 import './assets/styles/global.css'
+// 引入移动端设计层（仅 ≤767px 生效，需在 global.css 之后加载以覆盖手机端样式）
+import './assets/styles/mobile.css'
 
 // 创建 Vue 应用实例，以 App 根组件为参数
 const app = createApp(App)

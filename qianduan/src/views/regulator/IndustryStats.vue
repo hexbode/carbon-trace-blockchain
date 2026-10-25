@@ -29,13 +29,13 @@
       <el-col :span="14">
         <div class="panel">
           <div class="panel-header"><span class="title">各行业月度排放趋势</span></div>
-          <div class="panel-body"><div ref="trendChartRef" style="height: 340px"></div></div>
+          <div class="panel-body"><div ref="trendChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div></div>
         </div>
       </el-col>
       <el-col :span="10">
         <div class="panel">
           <div class="panel-header"><span class="title">行业排放占比</span></div>
-          <div class="panel-body"><div ref="pieChartRef" style="height: 340px"></div></div>
+          <div class="panel-body"><div ref="pieChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div></div>
         </div>
       </el-col>
     </el-row>
@@ -44,8 +44,65 @@
     <div class="panel">
       <div class="panel-header"><span class="title">{{ viewTitle }}</span></div>
       <div class="panel-body" style="padding: 0">
+        <!-- 手机端卡片列表：随当前激活视图切换展示，字段与下方对应表格列一致 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <!-- 行业汇总 -->
+          <template v-if="activeView === 'industry'">
+            <el-empty v-if="!industryStats.length" description="暂无行业汇总数据" :image-size="70" />
+            <div v-for="row in industryStats" :key="row.industry" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.industry }}</span>
+                <span class="m-card-sub">{{ row.enterpriseCount }} 家企业</span>
+              </div>
+              <div class="m-row"><span class="m-key">累计排放</span><span class="m-val text-primary" style="font-weight:600">{{ row.emission }} tCO₂</span></div>
+              <div class="m-row"><span class="m-key">认证数</span><span class="m-val">{{ row.certCount }}</span></div>
+            </div>
+          </template>
+          <!-- 企业排放排行 -->
+          <template v-else-if="activeView === 'enterprise'">
+            <el-empty v-if="!enterpriseRank.length" description="暂无企业排行数据" :image-size="70" />
+            <div v-for="(row, i) in enterpriseRank" :key="row.name" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.name }}</span>
+                <el-tag :type="i < 3 ? 'warning' : 'info'" size="small">{{ i + 1 }}</el-tag>
+              </div>
+              <div class="m-row"><span class="m-key">行业</span><span class="m-val">{{ row.industry }}</span></div>
+              <div class="m-row"><span class="m-key">累计排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.total }} tCO₂</span></div>
+              <div class="m-row"><span class="m-key">认证记录数</span><span class="m-val">{{ row.certCount }}</span></div>
+              <div class="m-row"><span class="m-key">占比</span><span class="m-val">{{ row.percent }}%</span></div>
+              <el-progress :percentage="row.percent" :stroke-width="8" color="#10b981" style="margin-top: 4px" />
+            </div>
+          </template>
+          <!-- 行业排放排行 -->
+          <template v-else-if="activeView === 'emission'">
+            <el-empty v-if="!industryEmission.length" description="暂无行业排放数据" :image-size="70" />
+            <div v-for="row in industryEmission" :key="row.industry" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.industry }}</span>
+                <span class="m-card-sub">{{ row.percent }}%</span>
+              </div>
+              <div class="m-row"><span class="m-key">累计排放</span><span class="m-val text-primary" style="font-weight:600">{{ row.total }} tCO₂</span></div>
+              <el-progress :percentage="row.percent" :stroke-width="8" color="#0ea5e9" style="margin-top: 4px" />
+            </div>
+          </template>
+          <!-- 认证记录 -->
+          <template v-else>
+            <el-empty v-if="!certList.length" description="暂无认证记录" :image-size="70" />
+            <div v-for="row in certList" :key="row.id" class="m-card">
+              <div class="m-card-head">
+                <span class="m-card-title">{{ row.id }}</span>
+              </div>
+              <div class="m-row"><span class="m-key">企业名称</span><span class="m-val">{{ row.enterpriseName }}</span></div>
+              <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+              <div class="m-row"><span class="m-key">排放量</span><span class="m-val">{{ row.amount }} tCO₂</span></div>
+              <div class="m-row"><span class="m-key">审核人</span><span class="m-val">{{ row.auditor }}</span></div>
+              <div class="m-row"><span class="m-key">认证时间</span><span class="m-val">{{ row.certifiedAt }}</span></div>
+            </div>
+          </template>
+        </div>
+
         <!-- 行业汇总视图 -->
-        <el-table v-if="activeView === 'industry'" :data="industryStats" stripe v-loading="loading">
+        <el-table v-else-if="activeView === 'industry'" :data="industryStats" stripe v-loading="loading">
           <el-table-column prop="industry" label="行业" min-width="150" align="center" />
           <el-table-column prop="enterpriseCount" label="企业数" min-width="120" align="center" />
           <el-table-column label="累计排放" min-width="160" align="center">
@@ -112,6 +169,11 @@ import { useECharts } from '@/composables/useECharts'
 // 引入监管端统计与认证接口
 import { getRegulatorIndustrySummary, getRegulatorIndustryRanking, getRegulatorEnterpriseRanking, getRegulatorEnterpriseTrend } from '@/api/stats'
 import { getCertifications } from '@/api/certification'
+// 引入设备检测：手机端将明细表格切换为卡片列表，并调整图表高度
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端渲染卡片列表、压缩图表高度）
+const { isMobile } = useDevice()
 
 // 图表配色方案（折线图与饼图共用）
 const colors = ['#10b981', '#0ea5e9', '#f59e0b', '#8b5cf6', '#ef4444']

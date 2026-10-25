@@ -62,7 +62,7 @@
       <!-- 右侧：功能标签页（占 60% 宽度） -->
       <el-col :span="16" class="profile-col-right">
         <div class="panel profile-panel">
-          <el-tabs v-model="activeTab" class="profile-tabs">
+          <el-tabs v-model="activeTab" class="profile-tabs" :class="{ 'tabs-mobile': isMobile }">
             <!-- 个人资料 -->
             <el-tab-pane name="info">
               <template #label>
@@ -218,13 +218,17 @@ import { UserFilled } from '@element-plus/icons-vue'
 // 导入用户状态仓库
 import { useUserStore } from '@/store'
 // 导入用户、企业、审核机构接口
-import { getUsers, updateUser, changeUserPassword, getUserSettings, updateUserSettings } from '@/api/user'
+import { getMyProfile, updateUser, changeUserPassword, getUserSettings, updateUserSettings } from '@/api/user'
 // 头像上传接口
 import { uploadAvatar } from '@/api/file'
 import { getEnterprises } from '@/api/enterprise'
 import { getAuditOrganizations } from '@/api/auditOrg'
+// 引入设备检测：手机端为标签页附加横向滚动样式（左右分栏堆叠由全局样式处理）
+import { useDevice } from '@/composables/useDevice'
 
 const userStore = useUserStore()
+// 设备类型（手机端标签页标题超出宽度时可横向滚动）
+const { isMobile } = useDevice()
 // 当前激活的标签页（默认个人资料）
 const activeTab = ref('info')
 
@@ -276,13 +280,8 @@ const infoRules = {
 }
 // 从数据库加载当前用户完整记录，并回填个人资料表单
 async function loadProfile() {
-  const users = await getUsers()
-  const list = users || []
-  // 优先按主键匹配（库里改过登录账号也能匹配上），首次加载时按登录账号匹配
-  const found = profile.value.id
-    ? list.find(u => u.id === profile.value.id)
-    : list.find(u => u.username === userStore.user?.username)
-  profile.value = found || {}
+  // 使用 /users/me 只查本人资料：企业端/审核端调用用户列表会被后端 403 拒绝
+  profile.value = (await getMyProfile()) || {}
   infoForm.name = profile.value.name || ''
   infoForm.email = profile.value.email || ''
   infoForm.signature = profile.value.signature || ''
@@ -621,6 +620,13 @@ async function saveSettings() {
   align-items: center;
   gap: 5px;
 }
+/* 手机端标签页：缩小标题间距与字号；标题超出面板宽度时由 Element Plus 自带的横向滑动/箭头滚动 */
+.profile-tabs.tabs-mobile :deep(.el-tabs__nav) {
+  gap: 18px;
+}
+.profile-tabs.tabs-mobile :deep(.el-tabs__item) {
+  font-size: 13px;
+}
 
 /* 表单区：限制最大宽度并居左对齐 */
 .tab-form {
@@ -741,5 +747,24 @@ async function saveSettings() {
 .setting-actions {
   text-align: right;
   padding-bottom: 16px;
+}
+
+/* 手机端：左右两栏改为上下堆叠，并收紧留白保证输入框可用宽度 */
+@media (max-width: 767px) {
+  .profile-col-left,
+  .profile-col-right {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+  .profile-card {
+    padding: 20px 16px;
+  }
+  .tab-form {
+    padding: 16px 12px 8px;
+  }
+  /* 验证码按钮适当收窄，避免与新手机号输入框互相挤压 */
+  .code-btn {
+    width: 112px;
+  }
 }
 </style>

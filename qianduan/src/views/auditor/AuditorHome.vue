@@ -42,9 +42,23 @@
             <!-- 跳转到待审核报告完整列表页 -->
             <el-button text type="primary" @click="$router.push('/auditor/pending')">全部待审核</el-button>
           </div>
-          <!-- 待审核列表：仅展示前 6 条 -->
+          <!-- 待审核列表：仅展示前 6 条（手机端用卡片列表，桌面端用表格） -->
           <div class="panel-body" style="padding: 0">
-            <el-table :data="pendingList" size="default">
+            <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+              <el-empty v-if="!pendingList.length" description="暂无待审核报告" :image-size="70" />
+              <div v-for="row in pendingList" :key="row.id" class="m-card">
+                <div class="m-card-head">
+                  <span class="m-card-title">{{ row.id }}</span>
+                  <el-tag type="warning" size="small">待审核</el-tag>
+                </div>
+                <div class="m-row"><span class="m-key">企业</span><span class="m-val">{{ row.enterpriseName }}</span></div>
+                <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+                <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+                <div class="m-row"><span class="m-key">提交时间</span><span class="m-val">{{ row.submittedAt }}</span></div>
+              </div>
+            </div>
+
+            <el-table v-else :data="pendingList" size="default">
               <el-table-column prop="id" label="报告编号" min-width="120" align="center" />
               <el-table-column prop="enterpriseName" label="企业" min-width="160" show-overflow-tooltip align="center" />
               <el-table-column prop="period" label="报告日期" min-width="120" align="center" />
@@ -60,8 +74,8 @@
       <el-col :span="10">
         <div class="panel">
           <div class="panel-header"><span class="title">近7日审核量</span></div>
-          <!-- ECharts 图表容器，高度 280px -->
-          <div class="panel-body"><div ref="chartRef" style="height: 280px"></div></div>
+          <!-- ECharts 图表容器：手机端降低高度，避免占用过多屏幕 -->
+          <div class="panel-body"><div ref="chartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div></div>
         </div>
       </el-col>
     </el-row>
@@ -80,7 +94,13 @@ import { useUserStore } from '@/store'
 // 引入统计与审核机构接口
 import { getAuditorOverview, getAuditorRecent7Days, getAuditorPendingQueue } from '@/api/stats'
 import { getAuditOrganizations } from '@/api/auditOrg'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
 
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
+// 列表加载态（手机端卡片列表使用）
+const loading = ref(false)
 // 用户 Store 实例：包含登录用户信息（姓名、机构 ID 等）
 const userStore = useUserStore()
 // 审核机构列表（用于展示当前审核员所属机构名称）
@@ -117,17 +137,22 @@ const { chartRef } = useECharts(option)
 
 // 拉取工作台数据
 async function load() {
-  const [ov, list, recent, orgList] = await Promise.all([
-    getAuditorOverview(),
-    getAuditorPendingQueue({ limit: 6 }),
-    getAuditorRecent7Days(),
-    getAuditOrganizations()
-  ])
-  overview.value = ov || {}
-  pendingList.value = list || []
-  days.value = recent?.days || []
-  data.value = recent?.data || []
-  orgs.value = orgList || []
+  loading.value = true
+  try {
+    const [ov, list, recent, orgList] = await Promise.all([
+      getAuditorOverview(),
+      getAuditorPendingQueue({ limit: 6 }),
+      getAuditorRecent7Days(),
+      getAuditOrganizations()
+    ])
+    overview.value = ov || {}
+    pendingList.value = list || []
+    days.value = recent?.days || []
+    data.value = recent?.data || []
+    orgs.value = orgList || []
+  } finally {
+    loading.value = false
+  }
 }
 onMounted(load)
 // 定时自动刷新：通过接口重新拉取数据，不重置页面状态

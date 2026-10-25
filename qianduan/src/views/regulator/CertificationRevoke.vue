@@ -47,8 +47,35 @@
         </el-form>
       </div>
       <div style="padding: 0 20px 20px">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list">
+          <el-empty v-if="!filtered.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in filtered" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.id }}</span>
+              <el-tag :type="row.status === 'revoked' ? 'danger' : 'success'" size="small">
+                {{ row.status === 'revoked' ? '已撤销' : '有效' }}
+              </el-tag>
+            </div>
+            <div class="m-card-sub">{{ row.enterpriseName }}</div>
+            <div class="m-row"><span class="m-key">报告期</span><span class="m-val">{{ row.period || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val">{{ row.amount }} tCO₂</span></div>
+            <div class="m-row"><span class="m-key">审核人</span><span class="m-val">{{ row.auditor || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">认证时间</span><span class="m-val">{{ row.certifiedAt || '-' }}</span></div>
+            <div class="m-row">
+              <span class="m-key">链上合规</span>
+              <span class="m-val"><el-button text type="primary" size="small" @click="viewCompliance(row)">查看判定</el-button></span>
+            </div>
+            <div v-if="filters.status === 'revoked'" class="m-row"><span class="m-key">撤销原因</span><span class="m-val">{{ row.revokeReason || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button v-if="row.status !== 'revoked'" text type="danger" size="small" @click="revoke(row)">撤销认证</el-button>
+              <el-button v-else text type="primary" size="small" @click="viewRevoke(row)">撤销详情</el-button>
+            </div>
+          </div>
+        </div>
+
         <!-- 认证记录表格 -->
-        <el-table :data="filtered" stripe v-loading="loading">
+        <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="id" label="认证编号" min-width="130" align="center" />
           <el-table-column prop="enterpriseName" label="企业名称" min-width="130" show-overflow-tooltip align="center" />
           <el-table-column prop="period" label="报告日期" min-width="150" align="center" />
@@ -86,7 +113,8 @@
 
     <!-- 撤销认证对话框：警示说明 + 认证信息描述 + 撤销原因表单 -->
     <el-dialog v-model="showRevoke" title="撤销认证" width="500px">
-      <div v-if="current">
+      <!-- 内容区：手机端限制高度并允许滚动，保证撤销原因可完整填写 -->
+      <div v-if="current" :style="isMobile ? { maxHeight: '60vh', overflowY: 'auto' } : null">
         <!-- 撤销操作不可逆警示 -->
         <el-alert type="warning" :closable="false" style="margin-bottom:16px">
           撤销后该认证证书将失效，电子防伪码仍保留在链上但标记为已撤销，操作不可撤销。
@@ -132,6 +160,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { getCertifications, revokeCertification } from '@/api/certification'
 // 引入链上合规判定接口
 import { getCertificateCompliance } from '@/api/compliance'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 筛选条件响应式状态：关键词 + 状态
 const filters = reactive({ keyword: '', status: '' })

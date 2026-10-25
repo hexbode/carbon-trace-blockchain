@@ -19,7 +19,30 @@
     <!-- 机构列表表格：展示机构编号、名称、资质、业务范围、联系人、电话、入驻时间、状态及操作 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
-        <el-table :data="list" stripe v-loading="loading">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!list.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in list" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.name }}</span>
+              <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">{{ row.status === 'active' ? '正常' : '停用' }}</el-tag>
+            </div>
+            <div class="m-card-sub">机构编号：{{ row.id }}</div>
+            <div class="m-row"><span class="m-key">资质证书号</span><span class="m-val">{{ row.qualification || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">业务范围</span><span class="m-val">{{ row.scope || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">联系人</span><span class="m-val">{{ row.contact || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">联系电话</span><span class="m-val">{{ row.phone || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">入驻时间</span><span class="m-val">{{ row.createdAt || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="openForm(row)">编辑</el-button>
+              <el-button text :type="row.status === 'active' ? 'warning' : 'success'" size="small" @click="toggle(row)">
+                {{ row.status === 'active' ? '停用' : '启用' }}
+              </el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="list" stripe v-loading="loading">
           <el-table-column prop="id" label="机构编号" min-width="110" align="center" />
           <el-table-column prop="name" label="机构名称" min-width="190" show-overflow-tooltip align="center" />
           <el-table-column prop="qualification" label="资质证书号" min-width="130" align="center" />
@@ -44,13 +67,15 @@
 
     <!-- 新增/编辑机构对话框：根据 form.id 是否存在切换标题 -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑审核机构' : '新增审核机构'" width="560px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
-        <el-form-item label="机构名称" prop="name"><el-input v-model="form.name" /></el-form-item>
-        <el-form-item label="资质证书号" prop="qualification"><el-input v-model="form.qualification" /></el-form-item>
-        <el-form-item label="业务范围" prop="scope"><el-input v-model="form.scope" placeholder="如：钢铁、化工、电力" /></el-form-item>
-        <el-form-item label="联系人" prop="contact"><el-input v-model="form.contact" /></el-form-item>
-        <el-form-item label="联系电话" prop="phone"><el-input v-model="form.phone" /></el-form-item>
-      </el-form>
+      <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
+          <el-form-item label="机构名称" prop="name"><el-input v-model="form.name" /></el-form-item>
+          <el-form-item label="资质证书号" prop="qualification"><el-input v-model="form.qualification" /></el-form-item>
+          <el-form-item label="业务范围" prop="scope"><el-input v-model="form.scope" placeholder="如：钢铁、化工、电力" /></el-form-item>
+          <el-form-item label="联系人" prop="contact"><el-input v-model="form.contact" /></el-form-item>
+          <el-form-item label="联系电话" prop="phone"><el-input v-model="form.phone" /></el-form-item>
+        </el-form>
+      </div>
       <template #footer>
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submit" :loading="submitting">保存</el-button>
@@ -68,6 +93,11 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 // 引入审核机构接口
 import { getAuditOrganizations, createAuditOrganization, updateAuditOrganization } from '@/api/auditOrg'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 机构列表
 const list = ref([])

@@ -179,4 +179,96 @@ const navItems = [
 }
 .public-footer p { margin: 4px 0; }
 .muted { color: #475569; font-size: 12px; }
+
+/* ============ 移动端：墨绿凭证头部 + 胶囊导航 ============ */
+@media (max-width: 767px) {
+  .public-layout {
+    background: var(--m-paper, #f3f6f2);
+  }
+  .public-header {
+    background: #071a16;
+    box-shadow: 0 10px 24px rgba(7, 26, 22, 0.18);
+  }
+  .header-inner {
+    height: auto;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .public-container {
+    padding: 0 14px;
+  }
+  .brand .logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: linear-gradient(140deg, #c8f169, #0f9d76);
+    color: #071a16;
+  }
+  .brand-name {
+    font-family: var(--m-serif, "Songti SC", "Noto Serif SC", serif);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .brand-sub {
+    display: none;
+  }
+  .header-right {
+    gap: 8px;
+  }
+  .header-right .el-tag {
+    display: none;
+  }
+  .header-right .el-button {
+    font-size: 12px;
+    color: var(--m-signal, #c8f169);
+  }
+  /* 导航：墨绿面板里的青柠胶囊 */
+  .public-nav {
+    order: 3;
+    width: 100%;
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    overflow-x: auto;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .public-nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-item {
+    flex: 0 0 auto;
+    padding: 7px 12px;
+    border-radius: 9px;
+    font-size: 12px;
+    color: #91a89e;
+    white-space: nowrap;
+    gap: 5px;
+  }
+  .nav-item.active {
+    background: var(--m-signal, #c8f169);
+    color: #071a16;
+    font-weight: 700;
+  }
+  .nav-item.active .el-icon {
+    color: #071a16;
+  }
+  .public-main {
+    padding: 18px 0 32px;
+  }
+  .public-footer {
+    padding: 18px 0;
+    background: #071a16;
+    font-size: 11px;
+  }
+  .public-footer .muted {
+    font-size: 10px;
+    color: #5b7268;
+  }
+}
 </style>

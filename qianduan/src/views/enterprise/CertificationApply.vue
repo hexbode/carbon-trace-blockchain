@@ -14,7 +14,27 @@
     <div class="panel mb-16">
       <div class="panel-header"><span class="title">可申请认证的报告</span></div>
       <div class="panel-body" style="padding: 0">
-        <el-table :data="applicable" stripe v-loading="loading">
+        <!-- 可申请报告：手机端用卡片列表，桌面端用表格 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!applicable.length" description="暂无可申请认证的报告，请先在「碳排放数据填报」中提交数据" :image-size="70" />
+          <div v-for="row in applicable" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.id }}</span>
+            </div>
+            <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+            <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+            <div class="m-row"><span class="m-key">电子防伪码</span><span class="m-val hash-text">{{ row.fingerprint }}</span></div>
+            <div class="m-row"><span class="m-key">提交时间</span><span class="m-val">{{ row.submittedAt }}</span></div>
+            <div class="m-card-actions">
+              <el-button type="primary" size="small" @click="apply(row)" :disabled="row.applied">
+                {{ row.applied ? '已申请' : '申请认证' }}
+              </el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="applicable" stripe v-loading="loading">
           <el-table-column prop="id" label="报告编号" min-width="100" align="center" />
           <el-table-column prop="period" label="报告日期" min-width="90" align="center" />
           <el-table-column prop="sourceName" label="排放源" min-width="90"  />
@@ -33,7 +53,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-if="!applicable.length" description="暂无可申请认证的报告，请先在「碳排放数据填报」中提交数据" />
+        <el-empty v-if="!isMobile && !applicable.length" description="暂无可申请认证的报告，请先在「碳排放数据填报」中提交数据" />
       </div>
     </div>
 
@@ -90,6 +110,8 @@ import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store'
 // 引入报告记录接口
 import { getReportRecords, applyReport } from '@/api/report'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
 
 // 用户 store 实例
 const userStore = useUserStore()
@@ -99,6 +121,8 @@ const records = ref([])
 const appliedIds = reactive(new Set())
 // 列表加载态
 const loading = ref(false)
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 // 可申请认证的报告：当前企业且未认证（含审核中与已驳回）的报告
 const applicable = computed(() => records.value
   .filter(r => r.status !== 'certified')

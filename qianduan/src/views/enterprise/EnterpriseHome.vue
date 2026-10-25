@@ -4,13 +4,13 @@
 -->
 <template>
   <div class="page-container">
-    <!-- 欢迎横幅：展示企业名称与概览说明 -->
-    <div class="welcome-banner">
+    <!-- 欢迎横幅：展示企业名称与概览说明（手机端隐藏大图标并压缩留白） -->
+    <div class="welcome-banner" :class="{ 'is-mobile': isMobile }">
       <div class="banner-text">
         <h2 >欢迎回来，{{ enterprise.name }}</h2>
         <p>以下是贵企业碳排放数据与认证状态概览</p>
       </div>
-      <div class="banner-icon">
+      <div class="banner-icon" v-if="!isMobile">
         <el-icon :size="64" color="#fff"><OfficeBuilding /></el-icon>
       </div>
     </div>
@@ -37,7 +37,7 @@
             <el-button text type="primary" @click="$router.push('/enterprise/trend')">详细统计</el-button>
           </div>
           <div class="panel-body">
-            <div ref="trendChartRef" style="height: 300px"></div>
+            <div ref="trendChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div>
           </div>
         </div>
       </el-col>
@@ -45,7 +45,7 @@
         <div class="panel">
           <div class="panel-header"><span class="title">排放源占比</span></div>
           <div class="panel-body">
-            <div ref="pieChartRef" style="height: 300px"></div>
+            <div ref="pieChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div>
           </div>
         </div>
       </el-col>
@@ -58,7 +58,29 @@
         <el-button text type="primary" @click="$router.push('/enterprise/records')">查看全部</el-button>
       </div>
       <div class="panel-body" style="padding: 0">
-        <el-table :data="recentRecords" size="default">
+        <!-- 最近报告列表：手机端用卡片列表，桌面端用表格 -->
+        <div v-if="isMobile" class="m-list" style="padding: 12px">
+          <el-empty v-if="!recentRecords.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in recentRecords" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.period }}</span>
+              <el-tag :type="tagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+            </div>
+            <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+            <div class="m-row"><span class="m-key">活动数据</span><span class="m-val">{{ row.activityData ?? '-' }} {{ row.activityUnit || '' }}</span></div>
+            <div class="m-row">
+              <span class="m-key">排放因子</span>
+              <span class="m-val m-val-inline">
+                <span>{{ row.emissionFactor ?? '-' }}</span>
+                <span class="m-unit">{{ row.unit || '-' }}/单位</span>
+              </span>
+            </div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+            <div class="m-row"><span class="m-key">提交时间</span><span class="m-val">{{ row.submittedAt }}</span></div>
+          </div>
+        </div>
+
+        <el-table v-else :data="recentRecords" size="default">
           <el-table-column prop="period" label="报告日期" min-width="150" align="center" />
           <el-table-column prop="sourceName" label="排放源" min-width="80" />
           <el-table-column label="排放量" min-width="80" >
@@ -90,6 +112,8 @@ import { getEnterprise } from '@/api/enterprise'
 import { getEnterpriseOverview, getEnterpriseTrend, getEnterpriseSourceShare } from '@/api/stats'
 // 引入报告记录接口
 import { getReportRecords } from '@/api/report'
+// 引入设备检测：手机端渲染卡片列表并压缩横幅与图表高度
+import { useDevice } from '@/composables/useDevice'
 
 // 用户 store 实例
 const userStore = useUserStore()
@@ -104,6 +128,8 @@ const months = ref([])
 const trendData = ref([])
 // 排放源占比数据
 const pieData = ref([])
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 汇总指标：累计碳排放总量、已认证/待审核报告数
 const totalEmission = computed(() => Number(overview.value.totalEmission || 0))
@@ -208,6 +234,12 @@ function tagType(s) { return { certified: 'success', pending: 'warning', rejecte
 .banner-text h2 { margin: 0 0 6px; font-size: 24px; }
 .banner-text p { margin: 0; opacity: .9; font-size: 14px; }
 .banner-icon { position: relative; z-index: 1; opacity: .85; }
+/* 手机端横幅：压缩内边距并降低标题字号，避免占用过多首屏高度 */
+.welcome-banner.is-mobile {
+  padding: 16px 18px;
+}
+.welcome-banner.is-mobile .banner-text h2 { font-size: 18px; }
+.welcome-banner.is-mobile .banner-text p { font-size: 12px; }
 /* 可跳转的指标卡片：使用手型光标提示可点击 */
 .stat-card.clickable { cursor: pointer; }
 </style>

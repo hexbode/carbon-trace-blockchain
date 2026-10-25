@@ -31,9 +31,37 @@
           </el-form-item>
         </el-form>
       </div>
-      <!-- 报告列表表格：展示报告编号、报告期、排放源、排放量、提交人、审核人、状态及操作 -->
+      <!-- 报告列表：手机端用卡片列表，桌面端用表格 -->
       <div style="padding: 0 20px 20px">
-        <el-table :data="filtered" stripe v-loading="loading">
+        <div v-if="isMobile" v-loading="loading" class="m-list">
+          <el-empty v-if="!filtered.length" description="暂无报告记录" :image-size="70" />
+          <div v-for="row in filtered" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.id }}</span>
+              <el-tag :type="tagType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+            </div>
+            <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+            <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+            <div class="m-row"><span class="m-key">活动数据</span><span class="m-val">{{ row.activityData ?? '-' }} {{ row.activityUnit || '' }}</span></div>
+            <div class="m-row">
+              <span class="m-key">排放因子</span>
+              <span class="m-val m-val-inline">
+                <span>{{ row.emissionFactor ?? '-' }}</span>
+                <span class="m-unit">{{ row.unit || '-' }}/单位</span>
+              </span>
+            </div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+            <div class="m-row"><span class="m-key">提交人</span><span class="m-val">{{ row.submitter }}</span></div>
+            <div class="m-row"><span class="m-key">提交时间</span><span class="m-val">{{ row.submittedAt }}</span></div>
+            <div class="m-row"><span class="m-key">审核人</span><span class="m-val">{{ row.auditor || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button size="small" type="primary" text @click="viewDetail(row)">详情</el-button>
+              <el-button v-if="row.status === 'rejected'" size="small" type="warning" text @click="viewDetail(row)">重新提交</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="id" label="报告编号" min-width="100" align="center" />
           <el-table-column prop="period" label="报告日期" min-width="180" align="center" />
           <el-table-column prop="sourceName" label="排放源" min-width="130"  />
@@ -65,6 +93,8 @@
           <el-descriptions-item label="报告编号">{{ current.id }}</el-descriptions-item>
           <el-descriptions-item label="报告日期">{{ current.period }}</el-descriptions-item>
           <el-descriptions-item label="排放源">{{ current.sourceName }}</el-descriptions-item>
+          <el-descriptions-item label="活动数据">{{ current.activityData ?? '-' }} {{ current.activityUnit || '' }}</el-descriptions-item>
+          <el-descriptions-item label="排放因子">{{ current.emissionFactor ?? '-' }} {{ current.unit || '' }}/单位</el-descriptions-item>
           <el-descriptions-item label="排放量">{{ current.amount }} tCO₂</el-descriptions-item>
           <el-descriptions-item label="电子防伪码"><span class="hash-text">{{ current.fingerprint }}</span></el-descriptions-item>
           <el-descriptions-item label="提交人">{{ current.submitter }}</el-descriptions-item>
@@ -92,6 +122,8 @@ import { useRoute } from 'vue-router'
 import { useUserStore } from '@/store'
 // 引入报告记录接口
 import { getReportRecords } from '@/api/report'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
 
 // 用户 store 实例
 const userStore = useUserStore()
@@ -101,6 +133,8 @@ const route = useRoute()
 const myRecords = ref([])
 // 列表加载态
 const loading = ref(false)
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 筛选条件：关键词与审核状态（状态默认取路由 query 中的 status，由统计卡片控制）
 const filters = reactive({ keyword: '', status: route.query.status || '' })

@@ -398,4 +398,252 @@ async function handleLogin() {
   opacity: 0.7;
   text-decoration: underline;
 }
+
+/* ============ 移动端：碳护照式登录 ============ */
+/* 设计概念：深墨绿底 + 青柠信号色，像一张可核验的碳凭证 */
+@media (max-width: 767px) {
+  .login-page {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+    background: #071a16;
+  }
+  @supports (min-height: 100dvh) {
+    .login-page {
+      min-height: 100dvh;
+    }
+  }
+  /* 细线内框：证书/护照的压印边 */
+  .login-page::after {
+    content: '';
+    position: fixed;
+    inset: 10px;
+    border: 1px solid rgba(200, 241, 105, 0.22);
+    border-radius: 18px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .bg-grid {
+    opacity: 0.55;
+  }
+  .glow-1 {
+    background: #c8f169;
+    opacity: 0.16;
+    top: -140px;
+    left: -120px;
+  }
+  .glow-2 {
+    background: #0f9d76;
+    opacity: 0.22;
+    bottom: -180px;
+    right: -120px;
+  }
+
+  .login-wrapper {
+    height: auto;
+    min-height: inherit;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 26px;
+    padding: 42px 22px 30px;
+  }
+
+  .brand-section {
+    max-width: none;
+    text-align: left;
+  }
+  .logo {
+    width: 46px;
+    height: 46px;
+    border-radius: 13px;
+    margin: 0 0 16px;
+    background: linear-gradient(140deg, #c8f169, #0f9d76);
+    color: #071a16;
+  }
+  .brand-name {
+    margin: 0 0 8px;
+    font-family: var(--m-serif, "Songti SC", "Noto Serif SC", serif);
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: none;
+    -webkit-text-fill-color: #f2f7f3;
+    color: #f2f7f3;
+  }
+  .brand-sub {
+    max-width: 300px;
+    margin: 0 0 14px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #8aa39a;
+  }
+  /* 机读区微文本 */
+  .brand-section::after {
+    content: 'BLOCKCHAIN CARBON LEDGER';
+    display: block;
+    font-family: var(--m-mono, ui-monospace, monospace);
+    font-size: 9px;
+    letter-spacing: 0.34em;
+    color: rgba(200, 241, 105, 0.6);
+  }
+  /* 特性列表改为账本条目 */
+  .brand-features {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .feature-item {
+    padding: 10px 0;
+    font-size: 12px;
+    color: #a9bdb4;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .feature-item .el-icon {
+    font-size: 14px;
+    color: var(--m-signal, #c8f169);
+  }
+  .feature-item::after {
+    content: '✓';
+    margin-left: auto;
+    font-size: 11px;
+    color: rgba(200, 241, 105, 0.5);
+  }
+
+  /* 登录卡片：深色凭证面板 */
+  .login-card {
+    width: 100%;
+    padding: 22px 18px 20px;
+    border-radius: 18px;
+    background: #0d2a22;
+    border: 1px solid rgba(200, 241, 105, 0.14);
+    box-shadow: 0 24px 50px rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .login-header {
+    margin-bottom: 18px;
+  }
+  .login-header h2 {
+    font-family: var(--m-serif, "Songti SC", serif);
+    font-size: 22px;
+    color: #f2f7f3;
+  }
+  .login-header p {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: #7f978d;
+  }
+
+  /* 角色选择：2×2 深色方块，选中态为青柠实底 */
+  .role-group {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .role-group :deep(.el-radio-button) {
+    flex: 0 0 calc(50% - 4px);
+  }
+  .role-group :deep(.el-radio-button__inner) {
+    width: 100%;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 12px !important;
+    box-shadow: none !important;
+    color: #a9bdb4;
+    font-size: 13px;
+  }
+  .role-group :deep(.el-radio-button.is-active .el-radio-button__inner) {
+    background: var(--m-signal, #c8f169);
+    border-color: var(--m-signal, #c8f169) !important;
+    color: #071a16;
+    font-weight: 700;
+  }
+
+  /* 输入框：深底浅字 */
+  .login-card :deep(.el-input__wrapper) {
+    min-height: 44px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09) inset;
+    border-radius: 12px;
+  }
+  .login-card :deep(.el-input__wrapper.is-focus) {
+    box-shadow: 0 0 0 1.5px var(--m-signal, #c8f169) inset;
+  }
+  .login-card :deep(.el-input__inner) {
+    color: #f2f7f3;
+  }
+  .login-card :deep(.el-input__inner::placeholder) {
+    color: #6f847c;
+  }
+  .login-card :deep(.el-input__prefix) {
+    color: #7f978d;
+  }
+  .login-card :deep(.el-checkbox__label) {
+    font-size: 12px;
+    color: #8aa39a;
+  }
+  .login-card :deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+    background: var(--m-signal, #c8f169);
+    border-color: var(--m-signal, #c8f169);
+  }
+  .login-card :deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
+    color: #c8f169;
+  }
+
+  .login-btn {
+    width: 100%;
+    height: 46px;
+    border-radius: 12px;
+    background: var(--m-signal, #c8f169);
+    border-color: var(--m-signal, #c8f169);
+    color: #071a16;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.28em;
+  }
+  .login-btn:hover,
+  .login-btn:focus {
+    background: #d6f78a;
+    border-color: #d6f78a;
+    color: #071a16;
+  }
+
+  /* 演示账号：等宽字体的账号胶囊 */
+  .demo-hint {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+  }
+  .hint-title {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: #6f847c;
+  }
+  .hint-list {
+    gap: 8px;
+  }
+  .hint-list span {
+    padding: 5px 11px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #b9cdc4;
+    font-family: var(--m-mono, ui-monospace, monospace);
+    font-size: 11px;
+  }
+  .hint-list span:hover {
+    background: rgba(200, 241, 105, 0.12);
+    color: #c8f169;
+  }
+  .public-entry {
+    font-size: 12px;
+    color: var(--m-signal, #c8f169);
+  }
+}
 </style>

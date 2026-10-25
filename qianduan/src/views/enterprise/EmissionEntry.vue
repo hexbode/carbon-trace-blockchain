@@ -51,7 +51,34 @@
 
     <!-- 数据列表：展示排放记录编号、报告期、排放源、活动数据、因子、排放量、指纹与状态 -->
     <div class="panel">
-      <el-table :data="filteredRecords" stripe v-loading="loading">
+      <!-- 手机端用卡片列表，字段与下方表格列一一对应 -->
+      <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+        <el-empty v-if="!filteredRecords.length" description="暂无数据" :image-size="70" />
+        <div v-for="row in filteredRecords" :key="row.id" class="m-card">
+          <div class="m-card-head">
+            <span class="m-card-title">{{ row.id }}</span>
+            <el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+          </div>
+          <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+          <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+          <div class="m-row"><span class="m-key">活动数据</span><span class="m-val">{{ row.activityData }} {{ row.activityUnit }}</span></div>
+          <div class="m-row">
+            <span class="m-key">排放因子</span>
+            <span class="m-val m-val-inline">
+              <span>{{ row.emissionFactor }}</span>
+              <span class="m-unit">{{ row.unit }}/单位</span>
+            </span>
+          </div>
+          <div class="m-row"><span class="m-key">碳排放量</span><span class="m-val text-primary" style="font-weight: 600">{{ row.amount }} {{ row.unit }}</span></div>
+          <div class="m-row"><span class="m-key">电子防伪码</span><span class="m-val hash-text">{{ row.fingerprint }}</span></div>
+          <div class="m-card-actions">
+            <el-button text type="primary" size="small" @click="viewDetail(row)">详情</el-button>
+            <el-button v-if="row.status === 'pending'" text type="warning" size="small" @click="viewDetail(row)">审核中</el-button>
+          </div>
+        </div>
+      </div>
+
+      <el-table v-else :data="filteredRecords" stripe v-loading="loading">
         <!-- min-width 按目标占比等比取值（1% = 10px），Element Plus 会按 min-width 比例分配剩余宽度 -->
         <el-table-column prop="id" label="记录编号" min-width="80" align="center" />
         <el-table-column prop="period" label="报告日期" min-width="100" align="center" />
@@ -164,6 +191,8 @@ import { getEmissionRecords, getEmissionSources, createEmissionRecord } from '@/
 // 企业详情接口
 import { getEnterprise } from '@/api/enterprise'
 import { useUserStore } from '@/store'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
 
 // ===== 当前登录企业与报告期 =====
 const userStore = useUserStore()
@@ -195,6 +224,8 @@ function matchKeyword(row) {
 const myRecords = ref([])
 // 列表加载态
 const loading = ref(false)
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 // 在自身记录基础上再按关键词、报告期、排放源、认证状态过滤
 const filteredRecords = computed(() =>
   myRecords.value.filter(r =>

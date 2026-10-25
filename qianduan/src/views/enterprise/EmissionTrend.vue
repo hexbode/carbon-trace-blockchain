@@ -45,13 +45,13 @@
       <el-col :span="16">
         <div class="panel">
           <div class="panel-header"><span class="title">月度排放量趋势</span></div>
-          <div class="panel-body"><div ref="lineChartRef" style="height: 340px"></div></div>
+          <div class="panel-body"><div ref="lineChartRef" :style="{ height: isMobile ? '240px' : '340px' }"></div></div>
         </div>
       </el-col>
       <el-col :span="8">
         <div class="panel">
           <div class="panel-header"><span class="title">排放源结构占比</span></div>
-          <div class="panel-body"><div ref="pieChartRef" style="height: 340px"></div></div>
+          <div class="panel-body"><div ref="pieChartRef" :style="{ height: isMobile ? '240px' : '340px' }"></div></div>
         </div>
       </el-col>
     </el-row>
@@ -59,7 +59,7 @@
     <!-- 各排放源排放对比柱状图 -->
     <div class="panel">
       <div class="panel-header"><span class="title">各排放源排放对比</span></div>
-      <div class="panel-body"><div ref="barChartRef" style="height: 320px"></div></div>
+      <div class="panel-body"><div ref="barChartRef" :style="{ height: isMobile ? '240px' : '320px' }"></div></div>
     </div>
   </div>
 </template>
@@ -75,9 +75,13 @@ import { useECharts } from '@/composables/useECharts'
 import { useUserStore } from '@/store'
 // 引入排放记录接口
 import { getEmissionRecords } from '@/api/emission'
+// 引入设备检测：手机端压缩图表高度
+import { useDevice } from '@/composables/useDevice'
 
 // 用户 store 实例
 const userStore = useUserStore()
+// 设备类型（手机端图表高度更紧凑）
+const { isMobile } = useDevice()
 
 // 筛选条件：时间范围（近 6/12 个月）与排放源
 const filters = reactive({ range: '12', source: '' })

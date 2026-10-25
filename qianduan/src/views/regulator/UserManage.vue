@@ -37,7 +37,30 @@
     <!-- 用户列表：展示用户名、角色、所属企业、状态与操作 -->
     <div class="panel">
       <div class="panel-body" style="padding: 0">
-        <el-table :data="filteredList" stripe v-loading="loading">
+        <!-- 手机端卡片列表 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!filteredList.length" description="暂无数据" :image-size="70" />
+          <div v-for="row in filteredList" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.username }}</span>
+              <el-tag :type="row.status === 'active' ? 'success' : 'info'" size="small">
+                {{ row.status === 'active' ? '正常' : '禁用' }}
+              </el-tag>
+            </div>
+            <div class="m-card-sub">{{ row.name }}</div>
+            <div class="m-row"><span class="m-key">角色</span><span class="m-val"><el-tag :type="roleType(row.role)" size="small">{{ roleLabel(row.role) }}</el-tag></span></div>
+            <div class="m-row"><span class="m-key">所属企业</span><span class="m-val">{{ enterpriseName(row.enterpriseId) }}</span></div>
+            <div class="m-row"><span class="m-key">联系电话</span><span class="m-val">{{ row.phone || '-' }}</span></div>
+            <div class="m-row"><span class="m-key">创建时间</span><span class="m-val">{{ row.createdAt || '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="openForm(row)">编辑</el-button>
+              <el-button text type="warning" size="small" @click="resetPwd(row)">重置密码</el-button>
+              <el-button text type="danger" size="small" @click="remove(row)">删除</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="filteredList" stripe v-loading="loading">
           <el-table-column prop="username" label="用户名" min-width="140" />
           <el-table-column prop="name" label="姓名" min-width="120" />
           <el-table-column label="角色" min-width="120" align="center">
@@ -72,29 +95,32 @@
 
     <!-- 新增/编辑用户弹窗：角色为企业用户时需选择所属企业 -->
     <el-dialog v-model="showForm" :title="form.id ? '编辑用户' : '新增用户'" width="520px">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" :disabled="!!form.id" />
-        </el-form-item>
-        <el-form-item label="姓名" prop="name">
-          <el-input v-model="form.name" />
-        </el-form-item>
-        <el-form-item label="角色" prop="role">
-          <el-select v-model="form.role" style="width: 100%" @change="form.enterpriseId = ''">
-            <el-option label="企业用户" value="enterprise" />
-            <el-option label="监管人员" value="regulator" />
-            <el-option label="系统管理员" value="admin" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="form.role === 'enterprise'" label="所属企业" prop="enterpriseId">
-          <el-select v-model="form.enterpriseId" style="width: 100%" filterable>
-            <el-option v-for="e in enterprises" :key="e.id" :label="e.name" :value="e.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="联系电话" prop="phone">
-          <el-input v-model="form.phone" />
-        </el-form-item>
-      </el-form>
+      <!-- 内容区：手机端限制高度并允许滚动，保证表单可完整填写 -->
+      <div :style="isMobile ? { maxHeight: '58vh', overflowY: 'auto', paddingRight: '4px' } : null">
+        <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+          <el-form-item label="用户名" prop="username">
+            <el-input v-model="form.username" :disabled="!!form.id" />
+          </el-form-item>
+          <el-form-item label="姓名" prop="name">
+            <el-input v-model="form.name" />
+          </el-form-item>
+          <el-form-item label="角色" prop="role">
+            <el-select v-model="form.role" style="width: 100%" @change="form.enterpriseId = ''">
+              <el-option label="企业用户" value="enterprise" />
+              <el-option label="监管人员" value="regulator" />
+              <el-option label="系统管理员" value="admin" />
+            </el-select>
+          </el-form-item>
+          <el-form-item v-if="form.role === 'enterprise'" label="所属企业" prop="enterpriseId">
+            <el-select v-model="form.enterpriseId" style="width: 100%" filterable>
+              <el-option v-for="e in enterprises" :key="e.id" :label="e.name" :value="e.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="联系电话" prop="phone">
+            <el-input v-model="form.phone" />
+          </el-form-item>
+        </el-form>
+      </div>
       <template #footer>
         <el-button @click="showForm = false">取消</el-button>
         <el-button type="primary" @click="submitForm" :loading="submitting">保存</el-button>
@@ -112,6 +138,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 // 用户与企业接口
 import { getUsers, createUser, updateUser, deleteUser, resetUserPassword } from '@/api/user'
 import { getEnterprises } from '@/api/enterprise'
+// 引入设备检测：手机端渲染卡片列表，桌面端渲染表格
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // ===== 筛选与列表 =====
 const filters = reactive({ username: '', role: '' })

@@ -43,9 +43,30 @@
           </el-form-item>
         </el-form>
       </div>
-      <!-- 今日审核记录列表 -->
+      <!-- 今日审核记录列表：手机端卡片列表，桌面端表格 -->
       <div style="padding: 0 20px 20px">
-        <el-table :data="filtered" stripe v-loading="loading">
+        <div v-if="isMobile" v-loading="loading" class="m-list">
+          <el-empty v-if="!filtered.length" description="暂无今日审核记录" :image-size="70" />
+          <div v-for="row in filtered" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.id }}</span>
+              <el-tag :type="row.status === 'certified' ? 'success' : 'danger'" size="small">
+                {{ row.status === 'certified' ? '通过' : '驳回' }}
+              </el-tag>
+            </div>
+            <div class="m-row"><span class="m-key">企业</span><span class="m-val">{{ row.enterpriseName }}</span></div>
+            <div class="m-row"><span class="m-key">报告日期</span><span class="m-val">{{ row.period }}</span></div>
+            <div class="m-row"><span class="m-key">排放源</span><span class="m-val">{{ row.sourceName }}</span></div>
+            <div class="m-row"><span class="m-key">排放量</span><span class="m-val text-primary" style="font-weight:600">{{ row.amount }} tCO₂</span></div>
+            <div class="m-row"><span class="m-key">审核人</span><span class="m-val">{{ row.auditor }}</span></div>
+            <div class="m-row"><span class="m-key">审核时间</span><span class="m-val">{{ row.auditedAt ? row.auditedAt.slice(11) : '-' }}</span></div>
+            <div class="m-card-actions">
+              <el-button text type="primary" size="small" @click="view(row)">详情</el-button>
+            </div>
+          </div>
+        </div>
+
+        <el-table v-else :data="filtered" stripe v-loading="loading">
           <el-table-column prop="id" label="报告编号" min-width="130" align="center" />
           <el-table-column prop="enterpriseName" label="企业" min-width="200" show-overflow-tooltip align="center" />
           <el-table-column prop="period" label="报告日期" min-width="130" align="center" />
@@ -75,26 +96,28 @@
       </div>
     </div>
 
-    <!-- 审核记录详情弹框：居中显示 -->
+    <!-- 审核记录详情弹框：居中显示（手机端内容区可滚动） -->
     <el-dialog v-model="showDetail" title="审核记录详情" width="620px">
-      <el-descriptions :column="1" border v-if="current">
-        <el-descriptions-item label="报告编号">{{ current.id }}</el-descriptions-item>
-        <el-descriptions-item label="企业">{{ current.enterpriseName }}</el-descriptions-item>
-        <el-descriptions-item label="报告日期">{{ current.period }}</el-descriptions-item>
-        <el-descriptions-item label="排放源">{{ current.sourceName }}</el-descriptions-item>
-        <el-descriptions-item label="排放量">{{ current.amount }} tCO₂</el-descriptions-item>
-        <el-descriptions-item label="电子防伪码"><span class="hash-text">{{ current.fingerprint }}</span></el-descriptions-item>
-        <el-descriptions-item label="提交人">{{ current.submitter }}</el-descriptions-item>
-        <el-descriptions-item label="提交时间">{{ current.submittedAt }}</el-descriptions-item>
-        <el-descriptions-item label="审核人">{{ current.auditor }}</el-descriptions-item>
-        <el-descriptions-item label="审核时间">{{ current.auditedAt }}</el-descriptions-item>
-        <el-descriptions-item label="审核结果">
-          <el-tag :type="current.status === 'certified' ? 'success' : 'danger'" size="small">
-            {{ current.status === 'certified' ? '通过' : '驳回' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="审核意见">{{ current.auditOpinion }}</el-descriptions-item>
-      </el-descriptions>
+      <div v-if="current" :class="{ 'dlg-scroll': isMobile }">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="报告编号">{{ current.id }}</el-descriptions-item>
+          <el-descriptions-item label="企业">{{ current.enterpriseName }}</el-descriptions-item>
+          <el-descriptions-item label="报告日期">{{ current.period }}</el-descriptions-item>
+          <el-descriptions-item label="排放源">{{ current.sourceName }}</el-descriptions-item>
+          <el-descriptions-item label="排放量">{{ current.amount }} tCO₂</el-descriptions-item>
+          <el-descriptions-item label="电子防伪码"><span class="hash-text">{{ current.fingerprint }}</span></el-descriptions-item>
+          <el-descriptions-item label="提交人">{{ current.submitter }}</el-descriptions-item>
+          <el-descriptions-item label="提交时间">{{ current.submittedAt }}</el-descriptions-item>
+          <el-descriptions-item label="审核人">{{ current.auditor }}</el-descriptions-item>
+          <el-descriptions-item label="审核时间">{{ current.auditedAt }}</el-descriptions-item>
+          <el-descriptions-item label="审核结果">
+            <el-tag :type="current.status === 'certified' ? 'success' : 'danger'" size="small">
+              {{ current.status === 'certified' ? '通过' : '驳回' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="审核意见">{{ current.auditOpinion }}</el-descriptions-item>
+        </el-descriptions>
+      </div>
       <template #footer>
         <el-button @click="showDetail = false">关闭</el-button>
       </template>
@@ -110,6 +133,11 @@ import { ref, reactive, computed, onMounted } from 'vue'
 // 引入今日审核统计与报告详情接口
 import { getAuditorTodayList, getAuditorTodaySummary } from '@/api/stats'
 import { getReportRecord } from '@/api/report'
+// 引入设备检测：手机端渲染卡片列表与可滚动弹窗
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端切换为卡片列表）
+const { isMobile } = useDevice()
 
 // 今日已审核列表
 const todayList = ref([])
@@ -180,5 +208,11 @@ useAutoRefresh(load)
 .stat-card.active {
   border-color: var(--primary);
   background: #f0fdf9;
+}
+/* 手机端弹窗内容区：限制最大高度并允许滚动，保证底部按钮始终可达 */
+.dlg-scroll {
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 </style>

@@ -32,13 +32,13 @@
       <el-col :span="14">
         <div class="panel">
           <div class="panel-header"><span class="title">行业碳排放对比</span></div>
-          <div class="panel-body"><div ref="industryChartRef" style="height: 320px"></div></div>
+          <div class="panel-body"><div ref="industryChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div></div>
         </div>
       </el-col>
       <el-col :span="10">
         <div class="panel">
           <div class="panel-header"><span class="title">认证状态分布</span></div>
-          <div class="panel-body"><div ref="statusChartRef" style="height: 320px"></div></div>
+          <div class="panel-body"><div ref="statusChartRef" :style="{ height: isMobile ? '240px' : '300px' }"></div></div>
         </div>
       </el-col>
     </el-row>
@@ -51,8 +51,19 @@
         <el-button text type="primary" @click="$router.push('/regulator/alerts')">查看全部</el-button>
       </div>
       <div class="panel-body" style="padding: 0">
-        <!-- 告警列表表格：仅展示最新 5 条待处理告警 -->
-        <el-table :data="topAlerts" size="default">
+        <!-- 告警列表：手机端用卡片展示，桌面端用表格；均仅展示最新 5 条待处理告警 -->
+        <div v-if="isMobile" v-loading="loading" class="m-list" style="padding: 12px">
+          <el-empty v-if="!topAlerts.length" description="暂无待处理告警" :image-size="70" />
+          <div v-for="row in topAlerts" :key="row.id" class="m-card">
+            <div class="m-card-head">
+              <span class="m-card-title">{{ row.enterpriseName }}</span>
+              <el-tag :type="row.level === 'high' ? 'danger' : row.level === 'medium' ? 'warning' : 'info'" size="small" effect="dark">{{ levelLabel(row.level) }}</el-tag>
+            </div>
+            <div class="m-row"><span class="m-key">告警内容</span><span class="m-val">{{ row.message }}</span></div>
+            <div class="m-row"><span class="m-key">时间</span><span class="m-val">{{ row.createdAt }}</span></div>
+          </div>
+        </div>
+        <el-table v-else :data="topAlerts" size="default">
           <el-table-column label="级别" min-width="80" align="center">
             <template #default="{ row }"><el-tag :type="row.level === 'high' ? 'danger' : row.level === 'medium' ? 'warning' : 'info'" size="small" effect="dark">{{ levelLabel(row.level) }}</el-tag></template>
           </el-table-column>
@@ -75,7 +86,13 @@ import { useECharts } from '@/composables/useECharts'
 // 引入监管端统计与告警接口
 import { getRegulatorOverview, getRegulatorIndustryEmission, getRegulatorCertStatus } from '@/api/stats'
 import { getAlerts } from '@/api/alert'
+// 引入设备检测：手机端将告警表格切换为卡片列表，并调整图表高度
+import { useDevice } from '@/composables/useDevice'
 
+// 设备类型（手机端渲染卡片列表、压缩图表高度）
+const { isMobile } = useDevice()
+// 告警列表加载态（手机端卡片列表显示 loading 遮罩）
+const loading = ref(false)
 // 监管概览统计
 const overview = ref({ enterpriseCount: 0, totalEmission: 0, certCount: 0, pendingAlerts: 0 })
 // 行业碳排放对比：行业名称与对应数值
@@ -136,17 +153,22 @@ function levelLabel(l) { return { high: '高危', medium: '中危', low: '低危
 
 // 拉取监管总览数据
 async function load() {
-  const [ov, industry, certStatus, alertList] = await Promise.all([
-    getRegulatorOverview(),
-    getRegulatorIndustryEmission(),
-    getRegulatorCertStatus(),
-    getAlerts({ status: 'pending' })
-  ])
-  overview.value = ov || {}
-  industries.value = (industry || []).map(i => i.industry)
-  industryValues.value = (industry || []).map(i => Math.round(i.amount))
-  statusMap.value = certStatus || { certified: 0, pending: 0, rejected: 0 }
-  topAlerts.value = (alertList || []).slice(0, 5)
+  loading.value = true
+  try {
+    const [ov, industry, certStatus, alertList] = await Promise.all([
+      getRegulatorOverview(),
+      getRegulatorIndustryEmission(),
+      getRegulatorCertStatus(),
+      getAlerts({ status: 'pending' })
+    ])
+    overview.value = ov || {}
+    industries.value = (industry || []).map(i => i.industry)
+    industryValues.value = (industry || []).map(i => Math.round(i.amount))
+    statusMap.value = certStatus || { certified: 0, pending: 0, rejected: 0 }
+    topAlerts.value = (alertList || []).slice(0, 5)
+  } finally {
+    loading.value = false
+  }
 }
 onMounted(load)
 // 定时自动刷新：通过接口重新拉取数据，不重置页面状态

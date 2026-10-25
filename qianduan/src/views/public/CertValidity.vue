@@ -15,7 +15,7 @@
     <div class="verify-box panel">
       <div class="verify-input">
         <el-input v-model="inputHash" type="textarea" :rows="3" placeholder="请输入认证电子防伪码或交易哈希进行验证" />
-        <el-button type="primary" size="large" style="margin-top: 12px" @click="verify">
+        <el-button type="primary" size="large" style="margin-top: 12px" :style="isMobile ? { width: '100%' } : null" @click="verify">
           <el-icon><Key /></el-icon> 区块链验证
         </el-button>
       </div>
@@ -28,14 +28,15 @@
     <!-- 验证结果面板：展示通过/失败状态及证书详情 -->
     <div v-if="result" class="result-panel panel" :class="result.valid ? 'valid' : 'invalid'">
       <div class="result-top">
-        <el-icon :size="52"><component :is="result.valid ? 'CircleCheck' : 'CircleClose'" /></el-icon>
+        <el-icon :size="isMobile ? 36 : 52"><component :is="result.valid ? 'CircleCheck' : 'CircleClose'" /></el-icon>
         <div class="result-text">
           <h2>{{ result.valid ? '验证通过' : '验证失败' }}</h2>
           <p>{{ result.msg }}</p>
         </div>
       </div>
       <div v-if="result.valid && result.cert" class="result-detail">
-        <el-descriptions :column="2" border>
+        <!-- 手机端单列展示，状态标签与哈希文本均可完整换行 -->
+        <el-descriptions :column="isMobile ? 1 : 2" border>
           <el-descriptions-item label="认证编号">{{ result.cert.id }}</el-descriptions-item>
           <el-descriptions-item label="企业">{{ result.cert.enterpriseName }}</el-descriptions-item>
           <el-descriptions-item label="报告日期">{{ result.cert.period }}</el-descriptions-item>
@@ -93,6 +94,11 @@ import { ref, onMounted } from 'vue'
 import { verifyCertification } from '@/api/certification'
 import { getSampleCerts } from '@/api/publicApi'
 import { getPublicCompliance } from '@/api/compliance'
+// 引入设备检测：手机端结果详情改为单列展示
+import { useDevice } from '@/composables/useDevice'
+
+// 设备类型（手机端调整详情列数与字号）
+const { isMobile } = useDevice()
 
 // ===== 验证状态 =====
 const inputHash = ref('')     // 输入的哈希
@@ -188,4 +194,24 @@ onMounted(async () => {
 .sample-item:hover { background: #ecfdf5; }
 .s-label { font-size: 13px; font-weight: 600; color: #0f172a; margin-bottom: 4px; }
 .s-hash { font-size: 11px; }
+/* 结果详情中的电子防伪码、交易哈希等长文本允许换行 */
+.result-detail :deep(.el-descriptions__content) { word-break: break-all; }
+
+@media (max-width: 767px) {
+  /* 标题与留白收紧，避免超大标题在窄屏溢出 */
+  .hero { margin-bottom: 18px; }
+  .hero h1 { font-size: 22px; }
+  .hero p { font-size: 13px; line-height: 1.6; }
+  /* 输入区与结果面板：内边距减小，保证内容完整可见 */
+  .verify-box { padding: 16px; }
+  .verify-tip { align-items: flex-start; padding: 10px 12px; font-size: 12px; line-height: 1.6; }
+  .result-panel { padding: 16px; margin-top: 16px; }
+  .result-top { align-items: flex-start; gap: 12px; }
+  .result-text h2 { font-size: 18px; }
+  .result-text p { word-break: break-all; }
+  .chain-proof { align-items: flex-start; font-size: 12px; line-height: 1.6; }
+  .compliance-head { flex-wrap: wrap; }
+  .samples { padding: 16px; }
+  .sample-item { padding: 10px 12px; }
+}
 </style>
