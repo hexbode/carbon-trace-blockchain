@@ -5,11 +5,13 @@
 #   1. 启动 WSL 发行版（systemd 模式下由 systemd 托管 MySQL / Redis /
 #      nginx / WeBASE / 后端 carbon-trace，enabled 的服务会自动拉起）；
 #   2. 显式 start 一遍关键服务，并逐个报告 active 状态；
-#   3. 轮询后端接口，就绪后用默认浏览器打开系统首页。
+#   3. 轮询后端接口，就绪后用默认浏览器打开系统首页；
+#   4. 确认 Windows 侧到 WSL 的局域网端口映射（其他设备可通过本机 IP 访问）。
 #
 # 可用环境变量：
 #   CARBON_WSL_DISTRO   WSL 发行版名称，默认 Ubuntu-26.04
 #   CARBON_APP_URL      系统访问地址，默认 http://localhost
+#   CARBON_LAN_PORT     Windows 局域网映射端口，默认 8088
 #
 # 用法：由 启动系统.bat 调用，或在 PowerShell 中直接运行本脚本
 # ============================================================
@@ -18,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 
 $distro = if ($env:CARBON_WSL_DISTRO) { $env:CARBON_WSL_DISTRO } else { 'Ubuntu-26.04' }
 $appUrl = if ($env:CARBON_APP_URL) { $env:CARBON_APP_URL } else { 'http://localhost' }
+$lanPort = if ($env:CARBON_LAN_PORT) { $env:CARBON_LAN_PORT } else { '8088' }
 $apiUrl = 'http://localhost:8080/api/public/enterprises'
 
 # 服务清单：顺序同时用于 systemctl start 与状态输出
@@ -31,7 +34,7 @@ Write-Host "  系统地址 = $appUrl"
 Write-Host '============================================' -ForegroundColor Cyan
 
 # 1. 拉起 WSL（systemd 为 PID 1，发行版启动后常驻）
-Write-Host '[1/3] 启动 WSL 发行版 ...'
+Write-Host '[1/4] 启动 WSL 发行版 ...'
 & wsl.exe -d $distro -u root -- bash -lc 'true'
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[错误] 无法启动 WSL 发行版 $distro。当前已安装的发行版：" -ForegroundColor Red
@@ -42,7 +45,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 2. 显式启动并逐个确认服务状态（systemd 启动时会自动拉起 enabled 服务，
 #    这里再 start 一遍是为了应对手工停过的服务）
-Write-Host '[2/3] 启动并检查服务 ...' -ForegroundColor Cyan
+Write-Host '[2/4] 启动并检查服务 ...' -ForegroundColor Cyan
 & wsl.exe -d $distro -u root -- systemctl start @services 2>$null | Out-Null
 
 $statusLines = & wsl.exe -d $distro -u root -- systemctl is-active @services 2>$null
@@ -59,7 +62,7 @@ if ($failed.Count -gt 0) {
 }
 
 # 3. 轮询后端，等待应用就绪后打开浏览器
-Write-Host '[3/3] 等待应用就绪 ...' -ForegroundColor Cyan
+Write-Host '[3/4] 等待应用就绪 ...' -ForegroundColor Cyan
 $ready = $false
 for ($i = 1; $i -le 90; $i++) {
     try {
@@ -81,9 +84,37 @@ if (-not $ready) {
     exit 1
 }
 
+# 4. 局域网访问：确认 Windows 侧存在到 WSL 内 nginx(80) 的端口映射
+Write-Host '[4/4] 检查局域网访问 ...' -ForegroundColor Cyan
+$lanIp = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up' } |
+          Select-Object -First 1).IPv4Address.IPAddress
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+$proxyLines = & netsh interface portproxy show v4tov4
+$hasMapping = $proxyLines | Select-String -Pattern ("^\s*0\.0\.0\.0\s+" + $lanPort + "\s+127\.0\.0\.1\s+80\s*$")
+if (-not $hasMapping) {
+    if ($isAdmin) {
+        & netsh interface portproxy add v4tov4 listenport=$lanPort listenaddress=0.0.0.0 connectport=80 connectaddress=127.0.0.1 | Out-Null
+        if (-not (Get-NetFirewallRule -DisplayName "CarbonTrace-LAN-$lanPort" -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName "CarbonTrace-LAN-$lanPort" -Direction Inbound -Protocol TCP `
+                -LocalPort $lanPort -Action Allow -Profile Any | Out-Null
+        }
+        Write-Host "  已创建端口映射 0.0.0.0:$lanPort -> 127.0.0.1:80" -ForegroundColor Green
+    } else {
+        Write-Host '[提示] 尚未配置局域网映射，请用管理员 PowerShell 执行一次：' -ForegroundColor Yellow
+        Write-Host "       netsh interface portproxy add v4tov4 listenport=$lanPort listenaddress=0.0.0.0 connectport=80 connectaddress=127.0.0.1"
+        Write-Host "       New-NetFirewallRule -DisplayName CarbonTrace-LAN-$lanPort -Direction Inbound -Protocol TCP -LocalPort $lanPort -Action Allow -Profile Any"
+    }
+}
+
 Write-Host ''
 Write-Host '系统已就绪：' -ForegroundColor Green
 Write-Host '  系统首页    http://localhost'
+if ($lanIp) {
+    Write-Host "  局域网访问  http://${lanIp}:$lanPort  （同一局域网内的其他设备）" -ForegroundColor Green
+} else {
+    Write-Host '  [提示] 未检测到局域网 IPv4 地址，其他设备暂时无法访问' -ForegroundColor Yellow
+}
 Write-Host '  后端 API    http://localhost:8080'
 Write-Host '  WeBASE 管理台 http://localhost:5000'
 Write-Host '  WeBASE-Front  http://localhost:5002'
