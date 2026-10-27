@@ -2,17 +2,21 @@ package com.carbon.trace.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.carbon.trace.common.ApiException;
+import com.carbon.trace.cbam.CbamOutboxService;
 import com.carbon.trace.entity.CbamDeclaration;
 import com.carbon.trace.entity.CbamGoods;
 import com.carbon.trace.entity.CbamInstallation;
 import com.carbon.trace.entity.CbamProductEmission;
+import com.carbon.trace.entity.CbamReconciliationLog;
 import com.carbon.trace.entity.CbamVerificationReport;
 import com.carbon.trace.entity.CbamVerifier;
 import com.carbon.trace.entity.Enterprise;
+import com.carbon.trace.mapper.CbamDataVersionMapper;
 import com.carbon.trace.mapper.CbamDeclarationMapper;
 import com.carbon.trace.mapper.CbamGoodsMapper;
 import com.carbon.trace.mapper.CbamInstallationMapper;
 import com.carbon.trace.mapper.CbamProductEmissionMapper;
+import com.carbon.trace.mapper.CbamReconciliationLogMapper;
 import com.carbon.trace.mapper.CbamVerificationReportMapper;
 import com.carbon.trace.mapper.CbamVerifierMapper;
 import com.carbon.trace.mapper.EnterpriseMapper;
@@ -21,6 +25,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
@@ -52,6 +57,9 @@ public class CbamServiceImpl implements CbamService {
     private final CbamVerifierMapper verifierMapper;
     private final CbamVerificationReportMapper reportMapper;
     private final CbamDeclarationMapper declarationMapper;
+    private final CbamDataVersionMapper dataVersionMapper;
+    private final CbamReconciliationLogMapper reconciliationLogMapper;
+    private final CbamOutboxService outboxService;
     private final EnterpriseMapper enterpriseMapper;
     private final ObjectMapper objectMapper;
 
@@ -61,6 +69,9 @@ public class CbamServiceImpl implements CbamService {
                            CbamVerifierMapper verifierMapper,
                            CbamVerificationReportMapper reportMapper,
                            CbamDeclarationMapper declarationMapper,
+                           CbamDataVersionMapper dataVersionMapper,
+                           CbamReconciliationLogMapper reconciliationLogMapper,
+                           CbamOutboxService outboxService,
                            EnterpriseMapper enterpriseMapper,
                            ObjectMapper objectMapper) {
         this.goodsMapper = goodsMapper;
@@ -69,6 +80,9 @@ public class CbamServiceImpl implements CbamService {
         this.verifierMapper = verifierMapper;
         this.reportMapper = reportMapper;
         this.declarationMapper = declarationMapper;
+        this.dataVersionMapper = dataVersionMapper;
+        this.reconciliationLogMapper = reconciliationLogMapper;
+        this.outboxService = outboxService;
         this.enterpriseMapper = enterpriseMapper;
         this.objectMapper = objectMapper;
     }
@@ -251,6 +265,7 @@ public class CbamServiceImpl implements CbamService {
     }
 
     @Override
+    @Transactional
     public CbamProductEmission createEmission(CbamProductEmission emission) {
         if (emission == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "排放记录不能为空");
@@ -260,28 +275,37 @@ public class CbamServiceImpl implements CbamService {
         emission.setCreatedAt(LocalDateTime.now());
         emission.setUpdatedAt(LocalDateTime.now());
         emissionMapper.insert(emission);
+        bumpVersion(emission.getEnterpriseId(), emission.getReportYear());
         return emissionMapper.selectById(emission.getId());
     }
 
     @Override
+    @Transactional
     public CbamProductEmission updateEmission(Long id, CbamProductEmission emission) {
         CbamProductEmission existing = requireEmission(id);
         if (emission == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "排放记录不能为空");
         }
+        Integer oldYear = existing.getReportYear();
         normalizeEmission(emission, existing.getEnterpriseId());
         emission.setId(id);
         emission.setEnterpriseId(existing.getEnterpriseId());
         emission.setCreatedAt(existing.getCreatedAt());
         emission.setUpdatedAt(LocalDateTime.now());
         emissionMapper.updateById(emission);
+        bumpVersion(existing.getEnterpriseId(), oldYear);
+        if (!oldYear.equals(emission.getReportYear())) {
+            bumpVersion(existing.getEnterpriseId(), emission.getReportYear());
+        }
         return emissionMapper.selectById(id);
     }
 
     @Override
+    @Transactional
     public void deleteEmission(Long id) {
-        requireEmission(id);
+        CbamProductEmission existing = requireEmission(id);
         emissionMapper.deleteById(id);
+        bumpVersion(existing.getEnterpriseId(), existing.getReportYear());
     }
 
     /**
@@ -433,6 +457,7 @@ public class CbamServiceImpl implements CbamService {
     // ==================== 年度申报包 ====================
 
     @Override
+    @Transactional
     public CbamDeclaration generateDeclaration(String enterpriseId, Integer year, String importerName) {
         if (!StringUtils.hasText(enterpriseId)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "企业编号不能为空");
@@ -521,6 +546,7 @@ public class CbamServiceImpl implements CbamService {
         declaration.setMissingItems(missing.isEmpty() ? "" : truncate(String.join("；", missing), 600));
         declaration.setStatus("draft");
         declaration.setReviewComment("");
+        declaration.setDataVersion(currentVersion(enterpriseId, year));
         declaration.setDeclarationNo(existing != null && StringUtils.hasText(existing.getDeclarationNo())
                 ? existing.getDeclarationNo() : "CBAM-" + year + "-" + enterpriseId);
         declaration.setPackageJson(toJson(buildPackage(declaration, enterprise, items, missing)));
@@ -532,7 +558,9 @@ public class CbamServiceImpl implements CbamService {
         } else {
             declarationMapper.updateById(declaration);
         }
-        return declarationMapper.selectById(declaration.getId());
+        CbamDeclaration result = getDeclaration(declaration.getId());
+        outboxService.append(result, "DECLARATION_GENERATED");
+        return result;
     }
 
     @Override
@@ -548,12 +576,16 @@ public class CbamServiceImpl implements CbamService {
             wrapper.eq(CbamDeclaration::getStatus, status);
         }
         wrapper.orderByDesc(CbamDeclaration::getReportYear).orderByDesc(CbamDeclaration::getId);
-        return declarationMapper.selectList(wrapper);
+        List<CbamDeclaration> declarations = declarationMapper.selectList(wrapper);
+        fillConsistency(declarations);
+        return declarations;
     }
 
     @Override
     public CbamDeclaration getDeclaration(Long id) {
-        return requireDeclaration(id);
+        CbamDeclaration declaration = requireDeclaration(id);
+        fillConsistency(List.of(declaration));
+        return declaration;
     }
 
     @Override
@@ -566,6 +598,7 @@ public class CbamServiceImpl implements CbamService {
     }
 
     @Override
+    @Transactional
     public CbamDeclaration submitDeclaration(Long id) {
         CbamDeclaration declaration = requireDeclaration(id);
         if (!"draft".equals(declaration.getStatus()) && !"returned".equals(declaration.getStatus())) {
@@ -579,10 +612,13 @@ public class CbamServiceImpl implements CbamService {
         declaration.setReviewComment("");
         declaration.setUpdatedAt(LocalDateTime.now());
         declarationMapper.updateById(declaration);
-        return declarationMapper.selectById(id);
+        CbamDeclaration result = getDeclaration(id);
+        outboxService.append(result, "DECLARATION_SUBMITTED");
+        return result;
     }
 
     @Override
+    @Transactional
     public CbamDeclaration reviewDeclaration(Long id, boolean approved, String comment) {
         CbamDeclaration declaration = requireDeclaration(id);
         String status = declaration.getStatus();
@@ -599,7 +635,9 @@ public class CbamServiceImpl implements CbamService {
         declaration.setReviewComment(StringUtils.hasText(comment) ? comment.trim() : "");
         declaration.setUpdatedAt(LocalDateTime.now());
         declarationMapper.updateById(declaration);
-        return declarationMapper.selectById(id);
+        CbamDeclaration result = getDeclaration(id);
+        outboxService.append(result, approved ? "DECLARATION_APPROVED" : "DECLARATION_RETURNED");
+        return result;
     }
 
     @Override
@@ -609,6 +647,7 @@ public class CbamServiceImpl implements CbamService {
             wrapper.eq(CbamDeclaration::getReportYear, year);
         }
         List<CbamDeclaration> declarations = declarationMapper.selectList(wrapper);
+        fillConsistency(declarations);
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("year", year);
         stats.put("declarations", declarations.size());
@@ -617,11 +656,88 @@ public class CbamServiceImpl implements CbamService {
         stats.put("approved", countStatus(declarations, "approved"));
         stats.put("returned", countStatus(declarations, "returned"));
         stats.put("complete", declarations.stream().filter(d -> "complete".equals(d.getCompleteness())).count());
+        stats.put("stale", declarations.stream().filter(d -> Boolean.TRUE.equals(d.getDataChanged())).count());
         stats.put("totalEmissions", declarations.stream()
                 .map(d -> nz(d.getTotalEmissions())).reduce(BigDecimal.ZERO, BigDecimal::add));
         stats.put("emissionRecords", emissionMapper.selectCount(new LambdaQueryWrapper<CbamProductEmission>()
                 .eq(year != null, CbamProductEmission::getReportYear, year)));
         return stats;
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> reconcile() {
+        List<CbamDeclaration> declarations = declarationMapper.selectList(
+                new LambdaQueryWrapper<CbamDeclaration>()
+                        .orderByDesc(CbamDeclaration::getReportYear)
+                        .orderByDesc(CbamDeclaration::getId));
+        fillConsistency(declarations);
+        LocalDateTime now = LocalDateTime.now();
+        int consistent = 0;
+        int stale = 0;
+        for (CbamDeclaration declaration : declarations) {
+            boolean changed = Boolean.TRUE.equals(declaration.getDataChanged());
+            CbamReconciliationLog log = new CbamReconciliationLog();
+            log.setDeclarationId(declaration.getId());
+            log.setDeclarationNo(declaration.getDeclarationNo());
+            log.setEnterpriseId(declaration.getEnterpriseId());
+            log.setReportYear(declaration.getReportYear());
+            log.setSnapshotVersion(declaration.getDataVersion());
+            log.setLiveVersion(declaration.getLiveVersion());
+            log.setSnapshotTotal(declaration.getTotalEmissions());
+            log.setLiveTotal(declaration.getLiveTotalEmissions());
+            log.setStatus(changed ? "stale" : "consistent");
+            log.setDetail(changed
+                    ? String.format("版本 %s → %s；实时 %s / 快照 %s tCO2e",
+                    declaration.getDataVersion(), declaration.getLiveVersion(),
+                    declaration.getLiveTotalEmissions(), declaration.getTotalEmissions())
+                    : String.format("版本 %s，实时与快照一致", declaration.getLiveVersion()));
+            log.setCheckedAt(now);
+            reconciliationLogMapper.insert(log);
+            if (changed) {
+                stale++;
+            } else {
+                consistent++;
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("checkedAt", now.toString());
+        result.put("total", declarations.size());
+        result.put("consistent", consistent);
+        result.put("stale", stale);
+        return result;
+    }
+
+    @Override
+    public List<CbamReconciliationLog> listReconciliationLogs(Integer year, Long declarationId, Integer limit) {
+        LambdaQueryWrapper<CbamReconciliationLog> wrapper = new LambdaQueryWrapper<>();
+        if (year != null) {
+            wrapper.eq(CbamReconciliationLog::getReportYear, year);
+        }
+        if (declarationId != null) {
+            wrapper.eq(CbamReconciliationLog::getDeclarationId, declarationId);
+        }
+        wrapper.orderByDesc(CbamReconciliationLog::getCheckedAt).orderByDesc(CbamReconciliationLog::getId);
+        int size = limit == null ? 50 : Math.max(1, Math.min(limit, 200));
+        wrapper.last("LIMIT " + size);
+        return reconciliationLogMapper.selectList(wrapper);
+    }
+
+    @Override
+    @Transactional
+    public Map<String, Object> cleanupReconciliationLogs(Integer retentionDays) {
+        int days = retentionDays == null ? 90 : retentionDays;
+        if (days < 1) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "保留天数必须大于 0");
+        }
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(days);
+        int archived = reconciliationLogMapper.archiveBefore(cutoff);
+        int deleted = reconciliationLogMapper.deleteBefore(cutoff);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("retentionDays", days);
+        result.put("archived", archived);
+        result.put("deleted", deleted);
+        return result;
     }
 
     // ==================== 内部工具 ====================
@@ -735,6 +851,47 @@ public class CbamServiceImpl implements CbamService {
 
     private long countStatus(List<CbamDeclaration> declarations, String status) {
         return declarations.stream().filter(d -> status.equals(d.getStatus())).count();
+    }
+
+    /**
+     * 快照对账：按当前排放记录重算实时合计，标记申报包是否已落后于实时数据。
+     * 申报包本身是冻结快照，这里只做“是否一致”的只读判断，不修改快照。
+     */
+    private void fillConsistency(List<CbamDeclaration> declarations) {
+        for (CbamDeclaration declaration : declarations) {
+            List<CbamProductEmission> emissions = emissionMapper.selectList(
+                    new LambdaQueryWrapper<CbamProductEmission>()
+                            .eq(CbamProductEmission::getEnterpriseId, declaration.getEnterpriseId())
+                            .eq(CbamProductEmission::getReportYear, declaration.getReportYear()));
+            BigDecimal live = emissions.stream()
+                    .map(e -> nz(e.getDirectEmissions()).add(nz(e.getIndirectEmissions())))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add)
+                    .setScale(3, RoundingMode.HALF_UP);
+            long liveVersion = currentVersion(declaration.getEnterpriseId(), declaration.getReportYear());
+            declaration.setLiveTotalEmissions(live);
+            declaration.setLiveVersion(liveVersion);
+            boolean versionChanged = declaration.getDataVersion() != null
+                    && declaration.getDataVersion() != liveVersion;
+            boolean totalsChanged = live.subtract(nz(declaration.getTotalEmissions())).abs()
+                    .compareTo(new BigDecimal("0.001")) > 0;
+            declaration.setDataChanged(versionChanged || totalsChanged);
+        }
+    }
+
+    /** 读取企业 + 年度的当前数据版本；无记录返回 0。 */
+    private long currentVersion(String enterpriseId, Integer year) {
+        if (!StringUtils.hasText(enterpriseId) || year == null) {
+            return 0L;
+        }
+        Long version = dataVersionMapper.selectVersion(enterpriseId, year);
+        return version == null ? 0L : version;
+    }
+
+    /** 排放记录变更后原子自增版本；无记录时插入版本 1。 */
+    private void bumpVersion(String enterpriseId, Integer year) {
+        if (StringUtils.hasText(enterpriseId) && year != null) {
+            dataVersionMapper.bumpVersion(enterpriseId, year);
+        }
     }
 
     private String truncate(String value, int max) {

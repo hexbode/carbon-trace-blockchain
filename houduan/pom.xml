@@ -35,6 +35,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+
+        <!-- CBAM Outbox → RabbitMQ 事件投递（mq-enabled=false 时不注册监听器） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
         <!-- 密码哈希（BCrypt），仅用 crypto 模块，不引入完整 Spring Security -->
         <dependency>
             <groupId>org.springframework.security</groupId>

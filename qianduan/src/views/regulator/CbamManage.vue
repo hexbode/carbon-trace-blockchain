@@ -37,6 +37,8 @@
           <el-input v-model="filters.keyword" placeholder="企业名称 / 申报编号" clearable style="width: 220px">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
+          <el-button :loading="reconciling" @click="reconcileNow">立即对账</el-button>
+          <el-button @click="openLogs">对账记录</el-button>
         </div>
       </div>
       <div class="panel-body">
@@ -52,6 +54,7 @@
             <div class="m-row"><span class="m-key">年度</span><span class="m-val">{{ row.reportYear }}</span></div>
             <div class="m-row"><span class="m-key">隐含排放</span><span class="m-val">{{ fmt(row.totalEmissions, 3) }} tCO₂e</span></div>
             <div class="m-row"><span class="m-key">完整性</span><span class="m-val">{{ row.completeness === 'complete' ? '通过' : '缺失' }}</span></div>
+            <div class="m-row"><span class="m-key">数据一致性</span><span class="m-val">{{ row.dataChanged ? '已变化' : '一致' }}</span></div>
             <div class="m-card-actions">
               <el-button text type="primary" size="small" @click="openDetail(row)">查看</el-button>
               <el-button v-if="row.status === 'submitted'" text type="success" size="small" @click="openReview(row)">确认/退回</el-button>
@@ -81,6 +84,15 @@
               <el-tag size="small" :type="row.completeness === 'complete' ? 'success' : 'warning'">
                 {{ row.completeness === 'complete' ? '通过' : '缺失' }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="数据一致性" width="120">
+            <template #default="{ row }">
+              <el-tooltip :content="`实时 ${fmt(row.liveTotalEmissions, 3)} / 快照 ${fmt(row.totalEmissions, 3)} tCO₂e；版本 ${row.dataVersion ?? '-'} → ${row.liveVersion ?? '-'}`">
+                <el-tag size="small" :type="row.dataChanged ? 'warning' : 'success'">
+                  {{ row.dataChanged ? '已变化' : '一致' }}
+                </el-tag>
+              </el-tooltip>
             </template>
           </el-table-column>
           <el-table-column label="状态" width="110">
@@ -125,6 +137,9 @@
           <el-descriptions-item label="直接排放">{{ fmt(detail.directEmissions, 3) }} tCO₂e</el-descriptions-item>
           <el-descriptions-item label="间接排放">{{ fmt(detail.indirectEmissions, 3) }} tCO₂e</el-descriptions-item>
         </el-descriptions>
+        <el-alert v-if="detail.dataChanged" type="warning" :closable="false" show-icon class="mb-16"
+                  title="实时排放数据与申报快照不一致"
+                  :description="`实时 ${fmt(detail.liveTotalEmissions, 3)} tCO₂e，快照 ${fmt(detail.totalEmissions, 3)} tCO₂e；数据版本 ${detail.dataVersion ?? '-'} → ${detail.liveVersion ?? '-'}。新增/修改的排放记录未纳入快照，请退回修改后由企业重新生成。`" />
         <el-alert v-if="detail.missingItems" type="warning" :closable="false" show-icon
                   title="缺失项" :description="detail.missingItems" class="mb-16" />
         <el-alert v-if="detail.reviewComment" type="info" :closable="false" show-icon
@@ -184,6 +199,32 @@
         <el-button type="primary" :loading="reviewing" @click="submitReview">提交</el-button>
       </template>
     </el-dialog>
+
+    <!-- 对账记录（定时任务每小时写入 + 手动触发） -->
+    <el-dialog v-model="logsVisible" title="对账记录" :width="isMobile ? '94%' : '900px'">
+      <el-table :data="logs" v-loading="logsLoading" size="small" stripe max-height="420">
+        <el-table-column prop="checkedAt" label="对账时间" width="170" />
+        <el-table-column prop="declarationNo" label="申报包" width="190" />
+        <el-table-column prop="reportYear" label="年度" width="70" />
+        <el-table-column label="版本" width="110">
+          <template #default="{ row }">{{ row.snapshotVersion ?? '-' }} → {{ row.liveVersion ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="快照 / 实时 (tCO₂e)" min-width="180">
+          <template #default="{ row }">{{ fmt(row.snapshotTotal, 3) }} / {{ fmt(row.liveTotal, 3) }}</template>
+        </el-table-column>
+        <el-table-column label="结果" width="90">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.status === 'consistent' ? 'success' : 'warning'">
+              {{ row.status === 'consistent' ? '一致' : '已变化' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="detail" label="说明" min-width="220" show-overflow-tooltip />
+      </el-table>
+      <template #footer>
+        <el-button @click="logsVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -191,7 +232,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { exportCbamDeclaration, getCbamDeclarations, getCbamStats, reviewCbamDeclaration } from '@/api/cbam'
+import { exportCbamDeclaration, getCbamDeclarations, getCbamReconciliationLogs, getCbamStats, reviewCbamDeclaration, runCbamReconciliation } from '@/api/cbam'
 import { getEnterprises } from '@/api/enterprise'
 import { useDevice } from '@/composables/useDevice'
 
@@ -210,7 +251,7 @@ const stats = computed(() => [
   { label: '申报包总数', value: statsData.value.declarations ?? declarations.value.length, cls: '' },
   { label: '待监管确认', value: statsData.value.submitted ?? 0, cls: 'text-warning' },
   { label: '已确认', value: statsData.value.approved ?? 0, cls: 'text-success' },
-  { label: '年度隐含排放', value: fmt(statsData.value.totalEmissions || 0, 1), unit: 'tCO₂e', cls: '' }
+  { label: '数据已变化', value: statsData.value.stale ?? 0, cls: 'text-warning' }
 ])
 
 const filtered = computed(() => {
@@ -332,6 +373,35 @@ async function reopen(row) {
     detailVisible.value = false
     await load()
   } catch (e) { /* 取消或接口错误 */ }
+}
+
+// ==================== 对账 ====================
+const reconciling = ref(false)
+const logsVisible = ref(false)
+const logsLoading = ref(false)
+const logs = ref([])
+
+async function reconcileNow() {
+  reconciling.value = true
+  try {
+    const result = await runCbamReconciliation()
+    ElMessage.success(`对账完成：一致 ${result.consistent}，异常 ${result.stale}`)
+    await load()
+  } catch (e) { /* 拦截器已提示 */ } finally {
+    reconciling.value = false
+  }
+}
+
+async function openLogs() {
+  logsVisible.value = true
+  logsLoading.value = true
+  try {
+    logs.value = await getCbamReconciliationLogs({ year: filters.year, limit: 50 }) || []
+  } catch (e) {
+    logs.value = []
+  } finally {
+    logsLoading.value = false
+  }
 }
 
 onMounted(load)

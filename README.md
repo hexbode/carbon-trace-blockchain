@@ -35,13 +35,13 @@ flowchart LR
 
 | 项目 | 数量 |
 | --- | --- |
-| 后端 Controller / REST 接口 | 17 / 101 |
-| 实体与 Mapper | 17 / 17 |
+| 后端 Controller / REST 接口 | 18 / 107 |
+| 实体与 Mapper | 21 / 21 |
 | 业务 Service | 16 |
 | 前端视图文件 | 28（24 个业务页 + 登录、个人中心 + 2 个布局） |
 | 前端接口模块 | 16 |
 | 智能合约 | 2（存证合约 14 个外部函数、合规合约 18 个外部函数） |
-| 业务数据表 | 17（11 张业务表 + 6 张 CBAM 表） |
+| 业务数据表 | 22（11 张业务表 + 11 张 CBAM 表） |
 
 ---
 
@@ -53,7 +53,7 @@ flowchart LR
 - **扫码核验**：公共端支持摄像头逐帧识别（`jsQR`），也支持拍照 / 上传二维码图片识别；识别后自动定位防伪码并查询。
 - **全站移动端**：以 767px 为断点，24 个业务页均有卡片化移动版本，含底部胶囊导航、抽屉菜单、底部抽屉式弹窗。
 - **数据可视化与预警**：ECharts 排放趋势、行业排名与占比；异常数据按级别展示并支持处理。
-- **CBAM 合规申报（P0）**：产品目录（CN 编码/行业/示例默认值）、生产装置、产品级隐含排放（直接+间接，实测或默认值）、欧盟认可核查机构与装置级核查报告；按年度生成申报包、完整性校验、JSON 导出与监管确认/退回。
+- **CBAM 合规申报（P0）**：产品目录（CN 编码/行业/示例默认值）、生产装置、产品级隐含排放（直接+间接，实测或默认值）、欧盟认可核查机构与装置级核查报告；按年度生成申报包、完整性校验、JSON 导出与监管确认/退回；排放数据版本号 + 每小时定时对账，自动识别“已确认快照落后于实时数据”。
 
 ### CBAM 合规能力（P0）
 
@@ -67,7 +67,16 @@ CBAM 正式期自 2026-01-01 起要求以「装置 / 产品（CN 编码）」为
 | 核算 | `cbam_product_emissions` 按年度 × 产品 × 装置登记，直接/间接排放 = 产量 × 强度，支持 actual / default |
 | 核查 | `cbam_verifiers` + `cbam_verification_reports`；actual 数据必须有 verified 报告，否则申报包判为缺失 |
 | 申报 | `cbam_declarations` 按企业 + 年度唯一，生成 JSON 快照，完整性校验后提交，监管端确认/退回 |
-| 页面 | 企业端「CBAM 合规申报」、监管端「CBAM 申报管理」 |
+| 版本与对账 | `cbam_data_versions` 按企业 + 年度记录数据版本，排放增删改即 +1；申报包生成时冻结 `data_version`；`cbam_reconciliation_logs` 保存每小时定时/手动对账结果，每日 03:30 清理 90 天前日志 |
+| 事件同步 | 事务性 Outbox（`cbam_outbox`）→ RabbitMQ（`cbam.events`）→ 监管幂等收件箱（`cbam_regulator_inbox`）；投递失败指数退避重试，毒消息进死信队列 |
+| 页面 | 企业端「CBAM 合规申报」、监管端「CBAM 申报管理」（含数据一致性、立即对账、对账记录） |
+
+> 定时对账默认每小时整点执行（`carbon.cbam.reconcile-cron` 可改），监管端也可「立即对账」；
+> 版本号可识别“增删后合计不变”的隐性漂移，避免只靠总量比对漏判。
+> Outbox→RabbitMQ 默认关闭（`carbon.cbam.outbox.mq-enabled=false`），演示环境在 `application-ubuntu.yml`
+> 中开启并连接本机 RabbitMQ；消费失败进死信队列，投递失败指数退避重试。
+> 演示栈需安装 RabbitMQ 4.x 并创建用户（`carbon / carbon123`，授予 `/` vhost 权限）；
+> 未安装时可保持 `mq-enabled=false`，事件会保留在 `cbam_outbox` 等待后续投递。
 
 > 边界：P0 不写链（P1 再接存证）、不做 CBAM Registry 报文格式转换；产品目录中的默认值为演示数值，
 > 正式使用前需导入欧盟 2026 官方默认值（Default values definitive period）。
@@ -82,6 +91,7 @@ CBAM 正式期自 2026-01-01 起要求以「装置 / 产品（CN 编码）」为
 | 前端特色库 | `qrcode`（生成真实二维码）、`jsqr`（摄像头/图片解码）、`jspdf`（证书 PDF） |
 | 后端 | Spring Boot 3.5.16 + MyBatis-Plus 3.5.9 + JDK 25 + Lombok 1.18.48 |
 | 数据库 | MySQL 8.x（库名 `carbon_emission`，utf8mb4） |
+| 消息队列 | RabbitMQ 4.x + Spring AMQP（CBAM 事务性 Outbox 投递，死信队列 + 消费幂等） |
 | 区块链 | FISCO BCOS v3.17.0 + WeBASE 3.1.1（Front / Sign）+ Solidity 0.8.x |
 | 链上调用 | Spring Boot → WeBASE-Front REST（`/trans/handle` 等），不依赖区块链 SDK |
 | 鉴权 | JWT（有效期 24 小时）+ 拦截器 + 角色校验 + 企业数据隔离 |
@@ -126,11 +136,11 @@ flowchart TB
 │   │   ├── chain/                  链网关、WeBASE 实现、离线桩、历史数据迁移、对账
 │   │   ├── common/                 JWT、鉴权拦截器、异常处理、电子防伪码、数据隔离
 │   │   ├── config/                 WebMvc、安全响应头、MyBatis-Plus、Jackson
-│   │   ├── controller/             17 个控制器
-│   │   ├── entity/ mapper/         17 个实体与 Mapper
+│   │   ├── controller/             18 个控制器
+│   │   ├── entity/ mapper/         21 个实体与 Mapper
 │   │   └── service/impl/           16 个业务服务
 │   ├── src/main/resources/         application.yml、chain/*.abi.json
-│   ├── api-tests.ps1               接口回归脚本（78 项断言，含 CBAM）
+│   ├── api-tests.ps1               接口回归脚本（96 项断言，含 CBAM/对账/Outbox）
 │   └── mvnw / mvnw.cmd             Maven 包装器
 ├── qianduan/                       前端（Vue 3 + Vite）
 │   ├── src/api/                    16 个接口模块 + 统一 request 封装
@@ -174,10 +184,10 @@ CREATE DATABASE carbon_emission DEFAULT CHARACTER SET utf8mb4;
 
 `carbon_emission_db.sql` → `03_profile_settings.sql` → `04_regulator_organizations.sql`
 → `05_sync_triggers.sql` → `06_align_schema.sql` → `07_align_all_schema.sql` → `08_user_avatar.sql`
-→ `09_cbam.sql`
+→ `09_cbam.sql` → `10_cbam_version_reconcile.sql` → `11_cbam_outbox.sql`
 
 > 注意：`carbon_emission_db.sql` 与 `05_sync_triggers.sql` 仍保留已下线链表 `blocks`、`block_transactions` 的建表语句。
-> 当前实际库结构为 **17 张表（11 张业务表 + 6 张 CBAM 表）、无任何哈希列**；如用脚本重建库，请先按现状更新这两处。
+> 当前实际库结构为 **22 张表（11 张业务表 + 11 张 CBAM 表）、无任何哈希列**；如用脚本重建库，请先按现状更新这两处。
 
 数据库连接在 `houduan/src/main/resources/application.yml`，默认 `root / 123456`，请按本机实际修改。
 
@@ -290,7 +300,7 @@ cd houduan/contracts
 
 ## 10. 接口与回归测试
 
-- 后端共 **17 个 Controller、101 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
+- 后端共 **18 个 Controller、107 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
 - 免登录白名单：`/api/auth/login`、`/api/public/**`、`/api/certifications/by-fingerprint/**`、
   `/api/certifications/verify`。
 - 登录态通过 `Authorization: Bearer <token>` 传递；角色取值 `enterprise / auditor / regulator / admin`。
@@ -302,9 +312,10 @@ cd houduan
 powershell -ExecutionPolicy Bypass -File api-tests.ps1
 ```
 
-脚本分 10 组共 **78 项断言**（认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
-其他业务、链模式与合规判定、CBAM 合规），全部通过时退出码为 0。stub 模式下会播种演示证书，
-因此防伪码核验、示例证书等断言与真实链行为一致；CBAM 组依赖 `09_cbam.sql` 的种子数据。
+脚本分 10 组共 **96 项断言**（认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
+其他业务、链模式与合规判定、CBAM 合规/对账/Outbox），全部通过时退出码为 0。stub 模式下会播种演示证书，
+因此防伪码核验、示例证书等断言与真实链行为一致；CBAM 组依赖 `09_cbam.sql`、`10_cbam_version_reconcile.sql`
+与 `11_cbam_outbox.sql` 的种子/迁移数据。
 
 ---
 

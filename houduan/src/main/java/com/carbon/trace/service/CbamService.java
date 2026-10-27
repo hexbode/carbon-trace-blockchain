@@ -4,6 +4,7 @@ import com.carbon.trace.entity.CbamDeclaration;
 import com.carbon.trace.entity.CbamGoods;
 import com.carbon.trace.entity.CbamInstallation;
 import com.carbon.trace.entity.CbamProductEmission;
+import com.carbon.trace.entity.CbamReconciliationLog;
 import com.carbon.trace.entity.CbamVerificationReport;
 import com.carbon.trace.entity.CbamVerifier;
 
@@ -70,4 +71,29 @@ public interface CbamService {
     CbamDeclaration reviewDeclaration(Long id, boolean approved, String comment);
 
     Map<String, Object> stats(Integer year);
+
+    /**
+     * 对账：按当前排放数据重算每个申报包的实时版本与实时合计，写入对账日志。
+     * 供定时任务与监管端“立即对账”共用。
+     *
+     * @return 对账时间、总数、一致数、异常数
+     */
+    Map<String, Object> reconcile();
+
+    /**
+     * 查询对账日志（按时间倒序，最多 limit 条）。
+     *
+     * @param year          年度，可空
+     * @param declarationId 申报包ID，可空
+     * @param limit         条数，默认 50，最大 200
+     */
+    List<CbamReconciliationLog> listReconciliationLogs(Integer year, Long declarationId, Integer limit);
+
+    /**
+     * 归档并清理过期对账日志：先复制到归档表，再删除主表数据。
+     *
+     * @param retentionDays 保留天数，默认 90，最小 1
+     * @return retentionDays / archived / deleted
+     */
+    Map<String, Object> cleanupReconciliationLogs(Integer retentionDays);
 }

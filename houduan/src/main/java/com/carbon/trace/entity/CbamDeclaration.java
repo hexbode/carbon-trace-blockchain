@@ -1,6 +1,7 @@
 package com.carbon.trace.entity;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -62,6 +63,21 @@ public class CbamDeclaration {
 
     /** 申报包 JSON 快照 */
     private String packageJson;
+
+    /** 生成时的数据版本快照（对应 cbam_data_versions.version） */
+    private Long dataVersion;
+
+    /** 当前数据版本（非表字段，读取时实时查询） */
+    @TableField(exist = false)
+    private Long liveVersion;
+
+    /** 实时排放合计（非表字段，读取时按当前排放记录重算，用于快照对账） */
+    @TableField(exist = false)
+    private BigDecimal liveTotalEmissions;
+
+    /** 实时排放与快照是否不一致（非表字段） */
+    @TableField(exist = false)
+    private Boolean dataChanged;
 
     /** 创建时间 */
     private LocalDateTime createdAt;

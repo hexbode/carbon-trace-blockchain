@@ -37,3 +37,7 @@ export const exportCbamDeclaration = (id) => request.get(`/cbam/declarations/${i
 export const submitCbamDeclaration = (id) => request.post(`/cbam/declarations/${id}/submit`)
 export const reviewCbamDeclaration = (id, data) => request.post(`/cbam/declarations/${id}/review`, data)
 export const getCbamStats = (params) => request.get('/cbam/stats', { params })
+
+// ==================== 对账（定时任务 + 监管手动触发） ====================
+export const runCbamReconciliation = () => request.post('/cbam/reconcile')
+export const getCbamReconciliationLogs = (params) => request.get('/cbam/reconciliation-logs', { params })

@@ -15,6 +15,15 @@ spring:
     url: jdbc:mysql://localhost:3306/carbon_emission?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: root
     password: 123456   # 请按本机实际密码修改
+  # CBAM Outbox → RabbitMQ（mq-enabled=false 时不注册监听器，也不连接 Broker）
+  rabbitmq:
+    host: ${CARBON_RABBIT_HOST:127.0.0.1}
+    port: ${CARBON_RABBIT_PORT:5672}
+    username: ${CARBON_RABBIT_USER:carbon}
+    password: ${CARBON_RABBIT_PASSWORD:carbon123}
+    listener:
+      simple:
+        default-requeue-rejected: false
 
 mybatis-plus:
   configuration:
@@ -42,6 +51,21 @@ carbon:
   # 仅在需要独立域名访问时才配置，例如：CARBON_CORS_ALLOWED_ORIGINS=https://a.example.com
   cors:
     allowed-origins: ${CARBON_CORS_ALLOWED_ORIGINS:}
+  # CBAM 申报包对账与 Outbox
+  cbam:
+    reconcile-cron: "0 0 * * * ?"
+    # 对账日志保留天数与每日清理时间
+    reconcile-retention-days: 90
+    reconcile-cleanup-cron: "0 30 3 * * ?"
+    outbox:
+      # true 时注册 RabbitMQ 拓扑、发布器与消费者；本地无 Broker 默认 false
+      mq-enabled: ${CARBON_CBAM_MQ_ENABLED:false}
+      exchange: cbam.events
+      queue: cbam.regulator.sync
+      routing-key: cbam.declaration
+      dead-letter-exchange: cbam.dlx
+      dead-letter-queue: cbam.regulator.sync.dlq
+      relay-interval-ms: 5000
   # ============================================================
   # 区块链层：FISCO BCOS + WeBASE + Solidity 智能合约
   #

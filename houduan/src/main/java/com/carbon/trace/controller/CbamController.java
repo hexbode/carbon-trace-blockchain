@@ -8,6 +8,7 @@ import com.carbon.trace.entity.CbamDeclaration;
 import com.carbon.trace.entity.CbamGoods;
 import com.carbon.trace.entity.CbamInstallation;
 import com.carbon.trace.entity.CbamProductEmission;
+import com.carbon.trace.entity.CbamReconciliationLog;
 import com.carbon.trace.entity.CbamVerificationReport;
 import com.carbon.trace.entity.CbamVerifier;
 import com.carbon.trace.service.CbamService;
@@ -249,6 +250,31 @@ public class CbamController {
     public Map<String, Object> stats(@RequestParam(required = false) Integer year) {
         requireManagerRole();
         return cbamService.stats(year);
+    }
+
+    /** 手动触发对账（定时任务同样调用该逻辑，默认每小时整点）。 */
+    @PostMapping("/reconcile")
+    public Map<String, Object> reconcile() {
+        requireManagerRole();
+        return cbamService.reconcile();
+    }
+
+    /** 对账日志：按年度/申报包筛选，默认最近 50 条。 */
+    @GetMapping("/reconciliation-logs")
+    public List<CbamReconciliationLog> reconciliationLogs(
+            @RequestParam(required = false) Integer year,
+            @RequestParam(required = false) Long declarationId,
+            @RequestParam(required = false) Integer limit) {
+        requireManagerRole();
+        return cbamService.listReconciliationLogs(year, declarationId, limit);
+    }
+
+    /** 手动归档并清理过期对账日志（默认保留 90 天）。 */
+    @PostMapping("/reconciliation-logs/cleanup")
+    public Map<String, Object> cleanupReconciliationLogs(
+            @RequestParam(required = false) Integer retentionDays) {
+        requireManagerRole();
+        return cbamService.cleanupReconciliationLogs(retentionDays);
     }
 
     // ==================== 角色与入参工具 ====================

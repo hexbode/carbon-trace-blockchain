@@ -439,6 +439,49 @@ Test-Status "CBAM 统计 管理员返回 200" $resp.Status 200
 $resp = Invoke-Api -Method Get -Uri "$base/api/cbam/declarations/999999/export" -Token $tokens['ent']
 Test-Status "CBAM 导出不存在的申报包返回 404" $resp.Status 404
 
+Test-True "CBAM 申报包带数据版本" ($cbamDecls.Count -gt 0 -and $null -ne $cbamDecls[0].dataVersion) "实际: $($cbamDecls | ConvertTo-Json -Depth 3 -Compress)"
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/reconcile" -Body @{} -Token $tokens['ent']
+Test-Status "CBAM 对账 企业角色返回 403" $resp.Status 403
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/reconcile" -Body @{} -Token $tokens['aud']
+Test-Status "CBAM 对账 审核角色返回 403" $resp.Status 403
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/reconcile" -Body @{} -Token $tokens['reg']
+Test-Status "CBAM 对账 监管角色返回 200" $resp.Status 200
+$recon = ConvertFrom-Json -InputObject $resp.Body
+Test-True "CBAM 对账返回一致/异常统计" ($null -ne $recon.total -and $null -ne $recon.consistent -and $null -ne $recon.stale) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/reconciliation-logs?year=2026&limit=10" -Token $tokens['reg']
+Test-Status "CBAM 对账日志 监管角色返回 200" $resp.Status 200
+$cbamLogs = @(ConvertFrom-Json -InputObject $resp.Body)
+Test-True "CBAM 对账日志至少 1 条" ($cbamLogs.Count -ge 1) "实际: $($resp.Body)"
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/reconciliation-logs?year=2026" -Token $tokens['ent']
+Test-Status "CBAM 对账日志 企业角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/reconciliation-logs/cleanup?retentionDays=90" -Body @{} -Token $tokens['reg']
+Test-Status "CBAM 对账日志清理 监管角色返回 200" $resp.Status 200
+$cleanup = ConvertFrom-Json -InputObject $resp.Body
+Test-True "CBAM 对账清理返回删除条数" ($null -ne $cleanup.deleted -and $null -ne $cleanup.retentionDays) "实际: $($resp.Body)"
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/reconciliation-logs/cleanup" -Body @{} -Token $tokens['ent']
+Test-Status "CBAM 对账日志清理 企业角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/outbox?limit=10" -Token $tokens['reg']
+Test-Status "CBAM Outbox 列表 监管角色返回 200" $resp.Status 200
+$cbamOutbox = @(ConvertFrom-Json -InputObject $resp.Body)
+Test-True "CBAM Outbox 至少 1 条事件" ($cbamOutbox.Count -ge 1) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/outbox/relay" -Body @{} -Token $tokens['reg']
+Test-Status "CBAM Outbox 手动中继 监管角色返回 200" $resp.Status 200
+$relay = ConvertFrom-Json -InputObject $resp.Body
+Test-True "CBAM Outbox 中继返回投递统计" ($null -ne $relay.sent -and $null -ne $relay.failed) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/regulator-inbox?limit=10" -Token $tokens['reg']
+Test-Status "CBAM 监管收件箱 监管角色返回 200" $resp.Status 200
+$cbamInbox = @(ConvertFrom-Json -InputObject $resp.Body)
+Test-True "CBAM 监管收件箱至少 1 条" ($cbamInbox.Count -ge 1) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/outbox?limit=10" -Token $tokens['ent']
+Test-Status "CBAM Outbox 列表 企业角色返回 403" $resp.Status 403
+
 # ===== 汇总 =====
 # 汇总只统计已执行的断言（跳过项不计入总数）；有失败时逐条打印并返回非零退出码，
 # 让 CI 或 .bat/.ps1 调用方无需解析日志即可判断成败。
