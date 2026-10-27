@@ -7,9 +7,11 @@ rem            WeBASE / carbon-trace), wait until the API is ready,
 rem            then open http://localhost in the default browser
 rem  dev     : start Windows local dev servers only
 rem            (stub backend on 8080 + Vite on 5173)
+rem  deploy  : build the latest backend jar and frontend dist, sync them to
+rem            /opt/carbon-trace on WSL, then restart carbon-trace
 rem
 rem  Place this file in <project root>\qidonqi\ together with
-rem  start-ubuntu.ps1 / start-backend.ps1 / start-frontend.ps1
+rem  start-ubuntu.ps1 / deploy.ps1 / start-backend.ps1 / start-frontend.ps1
 rem  Commands are ASCII only on purpose (avoid cmd codepage issues)
 rem ============================================================
 rem 中文说明：
@@ -18,14 +20,17 @@ rem   不带参数：默认模式，调用 start-ubuntu.ps1 拉起 WSL Ubuntu �
 rem             等待后端就绪后由脚本自动打开 http://localhost。
 rem   带参数 dev：开发模式，仅启动 Windows 本地服务（8080 后端 stub + 5173 前端），
 rem             不涉及 WSL，适合本机调试。
+rem   带参数 deploy：构建最新后端 jar 与前端 dist，同步到 WSL 的 /opt/carbon-trace，
+rem             重启 carbon-trace 服务；构建失败不会停止正在运行的旧服务。
 rem   参数通过 %1 传入，大小写不敏感（if /i）。
 rem ============================================================
 setlocal
 rem BASE 为启动器所在目录，%~dp0 自带结尾反斜杠，后续用 %BASE%文件名 拼接
 set "BASE=%~dp0"
 
-rem 参数为 dev 时跳到 :DEV 标签，否则继续走默认的 WSL 启动流程
+rem 参数为 dev 时跳到 :DEV 标签；为 deploy 时跳到 :DEPLOY；否则走默认 WSL 启动流程
 if /i "%~1"=="dev" goto DEV
+if /i "%~1"=="deploy" goto DEPLOY
 
 rem 前置检查：找不到同目录的 start-ubuntu.ps1 时无法继续，提示后退出（返回码 1）
 if not exist "%BASE%start-ubuntu.ps1" (
@@ -51,6 +56,32 @@ if errorlevel 1 (
   pause
 )
 rem 无论成功与否都返回 0：错误详情已由 PowerShell 输出，避免双击运行时控制台一闪而过
+exit /b 0
+
+:DEPLOY
+rem 部署模式：调用 deploy.ps1，先构建后端与前端，再同步到 WSL 并重启 carbon-trace。
+rem 构建阶段不会停止旧服务；只有两个构建都成功后才进入停止/替换阶段。
+if not exist "%BASE%deploy.ps1" (
+  echo [ERROR] deploy.ps1 not found next to this launcher.
+  echo         Expected: %BASE%deploy.ps1
+  pause
+  exit /b 1
+)
+
+echo ============================================
+echo   Carbon Trace System - build and deploy
+echo   target : /opt/carbon-trace on WSL
+echo   service: carbon-trace
+echo ============================================
+echo.
+rem 以 -NoProfile 跳过用户配置、-ExecutionPolicy Bypass 规避执行策略拦截
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BASE%deploy.ps1"
+rem 构建或部署失败时暂停，便于查看错误信息
+if errorlevel 1 (
+  echo.
+  echo [ERROR] deploy failed - see messages above.
+  pause
+)
 exit /b 0
 
 :DEV

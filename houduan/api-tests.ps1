@@ -111,10 +111,10 @@ function Test-True {
 Write-Host "===== 一、认证模块 =====" -ForegroundColor Cyan
 
 # 1. 四角色登录
-#    账号/密码须与当前数据库 users 表一致：auditor/regulator/admin 为默认 123456，
-#    enterprise01 使用该演示环境单独设定的密码；key 用于把 token 存入 $tokens。
+#    账号/密码须与当前数据库 users 表一致：四个演示账号统一为默认 123456；
+#    key 用于把 token 存入 $tokens。
 $roles = @(
-    @{ username = 'enterprise01'; password = '12345678abc'; role = 'enterprise'; key = 'ent' },
+    @{ username = 'enterprise01'; password = '123456'; role = 'enterprise'; key = 'ent' },
     @{ username = 'regulator01';  password = '123456'; role = 'regulator';  key = 'reg' },
     @{ username = 'auditor01';    password = '123456'; role = 'auditor';    key = 'aud' },
     @{ username = 'admin';        password = '123456'; role = 'admin';      key = 'adm' }
@@ -382,6 +382,62 @@ if ($fingerprint) {
     $resp = Invoke-Api -Method Get -Uri "$base/api/public/compliance/$fingerprint"
     Test-Status "/api/public/compliance 免登录返回 200" $resp.Status 200
 }
+
+# ------------------------------------------------------------
+# 十、CBAM 合规：产品目录/装置/产品排放/核查报告/申报包/统计
+#    正向断言依赖 09_cbam.sql 的演示种子数据；申报包导出仅在已生成时校验，
+#    未生成时跳过（不计入失败），避免空库误报。
+# ------------------------------------------------------------
+Write-Host "`n===== 十、CBAM 合规 =====" -ForegroundColor Cyan
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/goods" -Token $tokens['ent']
+Test-Status "CBAM 产品目录返回 200" $resp.Status 200
+$cbamGoods = @()
+if ($resp.Status -eq 200) { $parsedGoods = ConvertFrom-Json -InputObject $resp.Body; $cbamGoods = @($parsedGoods) }
+Test-True "CBAM 产品目录至少 6 条" ($cbamGoods.Count -ge 6) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/installations" -Token $tokens['ent']
+Test-Status "CBAM 装置列表返回 200" $resp.Status 200
+$cbamInst = @()
+if ($resp.Status -eq 200) { $parsedInst = ConvertFrom-Json -InputObject $resp.Body; $cbamInst = @($parsedInst) }
+Test-True "CBAM 装置列表至少 1 条" ($cbamInst.Count -ge 1) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/emissions?year=2026" -Token $tokens['ent']
+Test-Status "CBAM 产品排放列表返回 200" $resp.Status 200
+$cbamEm = @()
+if ($resp.Status -eq 200) { $parsedEm = ConvertFrom-Json -InputObject $resp.Body; $cbamEm = @($parsedEm) }
+Test-True "CBAM 产品排放至少 1 条" ($cbamEm.Count -ge 1) "实际: $($resp.Body)"
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/declarations?year=2026" -Token $tokens['ent']
+Test-Status "CBAM 申报包列表返回 200" $resp.Status 200
+$cbamDecls = @()
+if ($resp.Status -eq 200) { $parsedDecls = ConvertFrom-Json -InputObject $resp.Body; $cbamDecls = @($parsedDecls) }
+if ($cbamDecls.Count -gt 0) {
+    $resp = Invoke-Api -Method Get -Uri "$base/api/cbam/declarations/$($cbamDecls[0].id)/export" -Token $tokens['ent']
+    Test-Status "CBAM 申报包导出返回 200" $resp.Status 200
+    Test-True "CBAM 申报包导出包含 cnCode 字段" ($resp.Body -like '*cnCode*') "实际: $($resp.Body.Substring(0, [Math]::Min(120, $resp.Body.Length)))"
+}
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/declarations/generate" -Body @{ year = 2026 } -Token $tokens['reg']
+Test-Status "CBAM 生成申报包 监管角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Post -Uri "$base/api/cbam/verifiers" -Body @{ name = 'x'; accreditationNo = 'x-1' } -Token $tokens['ent']
+Test-Status "CBAM 新增核查机构 企业角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/verification-reports?year=2026" -Token $tokens['ent']
+Test-Status "CBAM 核查报告列表返回 200" $resp.Status 200
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/stats?year=2026" -Token $tokens['ent']
+Test-Status "CBAM 统计 企业角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/stats?year=2026" -Token $tokens['aud']
+Test-Status "CBAM 统计 审核角色返回 403" $resp.Status 403
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/stats?year=2026" -Token $tokens['adm']
+Test-Status "CBAM 统计 管理员返回 200" $resp.Status 200
+
+$resp = Invoke-Api -Method Get -Uri "$base/api/cbam/declarations/999999/export" -Token $tokens['ent']
+Test-Status "CBAM 导出不存在的申报包返回 404" $resp.Status 404
 
 # ===== 汇总 =====
 # 汇总只统计已执行的断言（跳过项不计入总数）；有失败时逐条打印并返回非零退出码，

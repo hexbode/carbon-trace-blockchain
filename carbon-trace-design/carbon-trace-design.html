@@ -469,7 +469,7 @@ flowchart TB
   subgraph L4["数据层"]
     DB[("MySQL 8.4 · carbon_emission")]
   end
-  subgraph L5["联盟链 · FISCO BCOS 3.x + WeBASE 3.1.1"]
+  subgraph L5["联盟链 · FISCO BCOS v3.17.0 + WeBASE 3.1.1"]
     WF["WeBASE-Front :5002"]
     WS["WeBASE-Sign :5004"]
     FN["node0 / node1 · group0"]
@@ -724,7 +724,7 @@ erDiagram
       <div class="chapter-head"><span class="num">08</span><h2>部署与运维</h2><span class="en">Deployment</span></div>
 
       <h3>演示环境拓扑</h3>
-      <p>Ubuntu 26.04（WSL2，systemd 启用）承载完整栈：FISCO BCOS 3.x 双节点 + WeBASE 3.1.1 + MySQL 8.4 + nginx + Spring Boot。所有服务由 systemd 托管，Windows 侧通过 WSL 的 localhost 转发访问。</p>
+      <p>Ubuntu 26.04（WSL2，systemd 启用）承载完整栈：FISCO BCOS v3.17.0 双节点 + WeBASE 3.1.1 + MySQL 8.4 + nginx + Spring Boot。所有服务由 systemd 托管，Windows 侧通过 WSL 的 localhost 转发访问。</p>
 
       <div class="table-wrap">
         <table>

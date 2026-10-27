@@ -24,7 +24,8 @@ export const menuConfig = {
       { path: '/enterprise/trend', name: 'EmissionTrend', title: '排放趋势统计', icon: 'TrendCharts' },
       { path: '/enterprise/records', name: 'ReportRecords', title: '报告提交记录', icon: 'Document' },
       { path: '/enterprise/apply', name: 'CertificationApply', title: '认证申请', icon: 'Promotion' },
-      { path: '/enterprise/certificate', name: 'CertificateView', title: '认证证书查看', icon: 'Stamp' }
+      { path: '/enterprise/certificate', name: 'CertificateView', title: '认证证书查看', icon: 'Stamp' },
+      { path: '/enterprise/cbam', name: 'CbamProduct', title: 'CBAM 合规申报', icon: 'Files' }
     ]
   },
   auditor: {
@@ -44,6 +45,7 @@ export const menuConfig = {
       { path: '/regulator/audit-org', name: 'AuditOrgManage', title: '审核机构管理', icon: 'School' },
       { path: '/regulator/factor', name: 'FactorManage', title: '碳排放因子管理', icon: 'Coin' },
       { path: '/regulator/revoke', name: 'CertificationRevoke', title: '认证管理', icon: 'CircleClose' },
+      { path: '/regulator/cbam', name: 'CbamManage', title: 'CBAM 申报管理', icon: 'Files' },
       { path: '/regulator/industry-stats', name: 'IndustryStats', title: '行业碳排放统计', icon: 'DataLine' },
       { path: '/regulator/alerts', name: 'Alerts', title: '异常数据监控', icon: 'Warning' },
       { path: '/regulator/users', name: 'UserManage', title: '用户管理', icon: 'User' }
@@ -88,6 +90,7 @@ const routes = [
       { path: 'enterprise/records', name: 'ReportRecords', component: () => import('@/views/enterprise/ReportRecords.vue'), meta: { title: '报告提交记录', roles: ['enterprise'] } },
       { path: 'enterprise/apply', name: 'CertificationApply', component: () => import('@/views/enterprise/CertificationApply.vue'), meta: { title: '认证申请', roles: ['enterprise'] } },
       { path: 'enterprise/certificate', name: 'CertificateView', component: () => import('@/views/enterprise/CertificateView.vue'), meta: { title: '认证证书查看', roles: ['enterprise'] } },
+      { path: 'enterprise/cbam', name: 'CbamProduct', component: () => import('@/views/enterprise/CbamProduct.vue'), meta: { title: 'CBAM 合规申报', roles: ['enterprise'] } },
       // ---- 审核端路由（role: auditor）----
       { path: 'auditor/home', name: 'AuditorHome', component: () => import('@/views/auditor/AuditorHome.vue'), meta: { title: '审核工作台', roles: ['auditor'] } },
       { path: 'auditor/pending', name: 'PendingReports', component: () => import('@/views/auditor/PendingReports.vue'), meta: { title: '待审核报告', roles: ['auditor'] } },
@@ -99,6 +102,7 @@ const routes = [
       { path: 'regulator/audit-org', name: 'AuditOrgManage', component: () => import('@/views/regulator/AuditOrgManage.vue'), meta: { title: '审核机构管理', roles: ['regulator', 'admin'] } },
       { path: 'regulator/factor', name: 'FactorManage', component: () => import('@/views/regulator/FactorManage.vue'), meta: { title: '碳排放因子管理', roles: ['regulator', 'admin'] } },
       { path: 'regulator/revoke', name: 'CertificationRevoke', component: () => import('@/views/regulator/CertificationRevoke.vue'), meta: { title: '认证管理', roles: ['regulator', 'admin'] } },
+      { path: 'regulator/cbam', name: 'CbamManage', component: () => import('@/views/regulator/CbamManage.vue'), meta: { title: 'CBAM 申报管理', roles: ['regulator', 'admin'] } },
       { path: 'regulator/industry-stats', name: 'IndustryStats', component: () => import('@/views/regulator/IndustryStats.vue'), meta: { title: '行业碳排放统计', roles: ['regulator', 'admin'] } },
       { path: 'regulator/alerts', name: 'Alerts', component: () => import('@/views/regulator/Alerts.vue'), meta: { title: '异常数据监控', roles: ['regulator', 'admin'] } },
       { path: 'regulator/users', name: 'UserManage', component: () => import('@/views/regulator/UserManage.vue'), meta: { title: '用户管理', roles: ['regulator', 'admin'] } }

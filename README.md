@@ -25,9 +25,9 @@ flowchart LR
 
 | 端 | 页面数 | 主要能力 |
 | --- | --- | --- |
-| 企业端 | 6 | 企业首页、排放填报、排放趋势、报告记录、认证申请、证书查看与下载 |
+| 企业端 | 7 | 企业首页、排放填报、排放趋势、报告记录、认证申请、证书查看与下载、CBAM 合规申报 |
 | 审核端 | 4 | 审核工作台、待审核报告、今日审核、审核历史 |
-| 监管端 | 8 | 监管总览、企业管理、审核机构管理、排放因子管理、认证管理（撤销）、行业统计、异常监控、用户管理 |
+| 监管端 | 9 | 监管总览、企业管理、审核机构管理、排放因子管理、认证管理（撤销）、CBAM 申报管理、行业统计、异常监控、用户管理 |
 | 公共端 | 4 | 电子防伪码查询、二维码验证、企业排放信息、认证有效性验证（全部免登录） |
 | 通用 | 2 | 登录、个人中心（含头像上传、修改密码、偏好设置） |
 
@@ -35,13 +35,13 @@ flowchart LR
 
 | 项目 | 数量 |
 | --- | --- |
-| 后端 Controller / REST 接口 | 16 / 77 |
-| 实体与 Mapper | 11 / 11 |
-| 业务 Service | 15 |
-| 前端视图文件 | 26（22 个业务页 + 登录、个人中心 + 2 个布局） |
-| 前端接口模块 | 15 |
+| 后端 Controller / REST 接口 | 17 / 101 |
+| 实体与 Mapper | 17 / 17 |
+| 业务 Service | 16 |
+| 前端视图文件 | 28（24 个业务页 + 登录、个人中心 + 2 个布局） |
+| 前端接口模块 | 16 |
 | 智能合约 | 2（存证合约 14 个外部函数、合规合约 18 个外部函数） |
-| 业务数据表 | 11 |
+| 业务数据表 | 17（11 张业务表 + 6 张 CBAM 表） |
 
 ---
 
@@ -51,8 +51,26 @@ flowchart LR
 - **合规判定上链**：配额、环比波动、活动数据为 0、排放因子不符、迟报五类规则由 `CarbonCompliance` 判定并返回结果位掩码；链不可用时可按配置回退到本地 Java 规则。
 - **证书体系**：真实可扫描二维码（`qrcode`）、证书详情弹窗、横向 A4 PDF 下载（`jsPDF` + Canvas 绘制），PDF 与弹窗内均含认证专用章与核验二维码。
 - **扫码核验**：公共端支持摄像头逐帧识别（`jsQR`），也支持拍照 / 上传二维码图片识别；识别后自动定位防伪码并查询。
-- **全站移动端**：以 767px 为断点，22 个业务页均有卡片化移动版本，含底部胶囊导航、抽屉菜单、底部抽屉式弹窗。
+- **全站移动端**：以 767px 为断点，24 个业务页均有卡片化移动版本，含底部胶囊导航、抽屉菜单、底部抽屉式弹窗。
 - **数据可视化与预警**：ECharts 排放趋势、行业排名与占比；异常数据按级别展示并支持处理。
+- **CBAM 合规申报（P0）**：产品目录（CN 编码/行业/示例默认值）、生产装置、产品级隐含排放（直接+间接，实测或默认值）、欧盟认可核查机构与装置级核查报告；按年度生成申报包、完整性校验、JSON 导出与监管确认/退回。
+
+### CBAM 合规能力（P0）
+
+CBAM 正式期自 2026-01-01 起要求以「装置 / 产品（CN 编码）」为单位申报隐含排放，实际排放须经欧盟国家认可机构（NAB）认可的核查机构核查，年度申报截止次年 9 月 30 日。
+
+平台已补全的最小闭环：
+
+| 能力 | 实现 |
+| --- | --- |
+| 主数据 | `cbam_goods` 产品目录（6 个行业示例）、`cbam_installations` 装置档案 |
+| 核算 | `cbam_product_emissions` 按年度 × 产品 × 装置登记，直接/间接排放 = 产量 × 强度，支持 actual / default |
+| 核查 | `cbam_verifiers` + `cbam_verification_reports`；actual 数据必须有 verified 报告，否则申报包判为缺失 |
+| 申报 | `cbam_declarations` 按企业 + 年度唯一，生成 JSON 快照，完整性校验后提交，监管端确认/退回 |
+| 页面 | 企业端「CBAM 合规申报」、监管端「CBAM 申报管理」 |
+
+> 边界：P0 不写链（P1 再接存证）、不做 CBAM Registry 报文格式转换；产品目录中的默认值为演示数值，
+> 正式使用前需导入欧盟 2026 官方默认值（Default values definitive period）。
 
 ---
 
@@ -64,7 +82,7 @@ flowchart LR
 | 前端特色库 | `qrcode`（生成真实二维码）、`jsqr`（摄像头/图片解码）、`jspdf`（证书 PDF） |
 | 后端 | Spring Boot 3.5.16 + MyBatis-Plus 3.5.9 + JDK 25 + Lombok 1.18.48 |
 | 数据库 | MySQL 8.x（库名 `carbon_emission`，utf8mb4） |
-| 区块链 | FISCO BCOS 3.x + WeBASE 3.1.1（Front / Sign）+ Solidity 0.8.x |
+| 区块链 | FISCO BCOS v3.17.0 + WeBASE 3.1.1（Front / Sign）+ Solidity 0.8.x |
 | 链上调用 | Spring Boot → WeBASE-Front REST（`/trans/handle` 等），不依赖区块链 SDK |
 | 鉴权 | JWT（有效期 24 小时）+ 拦截器 + 角色校验 + 企业数据隔离 |
 
@@ -82,7 +100,7 @@ flowchart TB
     API[Spring Boot 3.5<br/>JWT + 业务服务]
     DB[(MySQL 8)]
     WB[WeBASE-Front]
-    CH[FISCO BCOS 3.x<br/>CarbonCertRegistry / CarbonCompliance]
+    CH[FISCO BCOS v3.17.0<br/>CarbonCertRegistry / CarbonCompliance]
 
     PC --> NG
     MB --> NG
@@ -108,18 +126,18 @@ flowchart TB
 │   │   ├── chain/                  链网关、WeBASE 实现、离线桩、历史数据迁移、对账
 │   │   ├── common/                 JWT、鉴权拦截器、异常处理、电子防伪码、数据隔离
 │   │   ├── config/                 WebMvc、安全响应头、MyBatis-Plus、Jackson
-│   │   ├── controller/             16 个控制器
-│   │   ├── entity/ mapper/         11 个实体与 Mapper
-│   │   └── service/impl/           15 个业务服务
+│   │   ├── controller/             17 个控制器
+│   │   ├── entity/ mapper/         17 个实体与 Mapper
+│   │   └── service/impl/           16 个业务服务
 │   ├── src/main/resources/         application.yml、chain/*.abi.json
-│   ├── api-tests.ps1               接口回归脚本（61 项断言）
+│   ├── api-tests.ps1               接口回归脚本（78 项断言，含 CBAM）
 │   └── mvnw / mvnw.cmd             Maven 包装器
 ├── qianduan/                       前端（Vue 3 + Vite）
-│   ├── src/api/                    15 个接口模块 + 统一 request 封装
+│   ├── src/api/                    16 个接口模块 + 统一 request 封装
 │   ├── src/assets/styles/          global.css、mobile.css（移动端设计层）
 │   ├── src/composables/            useDevice、useAutoRefresh、useECharts
 │   ├── src/router/ store/ utils/
-│   └── src/views/                  26 个视图（enterprise / auditor / regulator / public）
+│   └── src/views/                  28 个视图（enterprise / auditor / regulator / public）
 ├── database/                       建表与增量 SQL
 ├── docs/                           设计方案（DOCX / PPTX）与接口清单
 ├── qidonqi/                        一键启动脚本（WSL Ubuntu / Windows 开发）
@@ -137,7 +155,7 @@ flowchart TB
 - Maven（直接使用项目自带 `mvnw` / `mvnw.cmd`）
 - **Node.js 18+**
 - **MySQL 8.x**
-- 可选：FISCO BCOS 3.x 节点 + WeBASE 3.1.1（Front 5002 / Sign 5004）
+- 可选：FISCO BCOS v3.17.0 节点 + WeBASE 3.1.1（Front 5002 / Sign 5004）
   - 群组标识为 `group0`（WeBASE 1.5.x / FISCO BCOS 2.x 才是 `1`）
   - 编译合约需 **solc 0.8.30**（`--via-ir --evm-version london`）；WeBASE 内置 0.8.11 无法编译本项目合约
   - 本机开发可不装链：后端默认 `carbon.chain.mode=stub`
@@ -156,9 +174,10 @@ CREATE DATABASE carbon_emission DEFAULT CHARACTER SET utf8mb4;
 
 `carbon_emission_db.sql` → `03_profile_settings.sql` → `04_regulator_organizations.sql`
 → `05_sync_triggers.sql` → `06_align_schema.sql` → `07_align_all_schema.sql` → `08_user_avatar.sql`
+→ `09_cbam.sql`
 
 > 注意：`carbon_emission_db.sql` 与 `05_sync_triggers.sql` 仍保留已下线链表 `blocks`、`block_transactions` 的建表语句。
-> 当前实际库结构为 **11 张表、无任何哈希列**；如用脚本重建库，请先按现状更新这两处。
+> 当前实际库结构为 **17 张表（11 张业务表 + 6 张 CBAM 表）、无任何哈希列**；如用脚本重建库，请先按现状更新这两处。
 
 数据库连接在 `houduan/src/main/resources/application.yml`，默认 `root / 123456`，请按本机实际修改。
 
@@ -187,11 +206,14 @@ npm run dev
 
 | 命令 | 行为 |
 | --- | --- |
-| `qidonqi\启动系统.bat` | 启动 WSL Ubuntu 演示栈，等待接口就绪后打开浏览器，并检查局域网端口映射 |
+| `qidonqi\启动系统.bat` | 启动 WSL Ubuntu 演示栈，等待接口就绪后打开浏览器，并检查 HTTP/HTTPS 局域网映射 |
 | `qidonqi\启动系统.bat dev` | 仅启动 Windows 本地开发环境（stub 后端 8080 + Vite 5173） |
+| `qidonqi\启动系统.bat deploy` | 构建最新后端 jar 与前端 dist，同步到 `/opt/carbon-trace` 并重启 `carbon-trace` |
 
 `start-ubuntu.ps1` 会依次拉起 WSL 发行版、启动并检查 systemd 服务、轮询后端接口，最后输出
-本机局域网访问地址（`http://<内网IP>:8088`）。
+本机与局域网访问地址（`http://<内网IP>:8088`、`https://<内网IP>:8443`）以及证书下载地址。
+`deploy.ps1` 会先完成两个构建再停止旧服务，jar 采用 `.new → mv` 原子替换，并保留上一版
+`carbon-trace.jar.prev` 作为回滚点。
 
 ### 7.5 本机演示部署（可选）
 
@@ -268,7 +290,7 @@ cd houduan/contracts
 
 ## 10. 接口与回归测试
 
-- 后端共 **16 个 Controller、77 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
+- 后端共 **17 个 Controller、101 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
 - 免登录白名单：`/api/auth/login`、`/api/public/**`、`/api/certifications/by-fingerprint/**`、
   `/api/certifications/verify`。
 - 登录态通过 `Authorization: Bearer <token>` 传递；角色取值 `enterprise / auditor / regulator / admin`。
@@ -280,9 +302,9 @@ cd houduan
 powershell -ExecutionPolicy Bypass -File api-tests.ps1
 ```
 
-脚本分 9 组共 **61 项断言**（认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
-其他业务、链模式与合规判定），全部通过时退出码为 0。stub 模式下会播种演示证书，
-因此防伪码核验、示例证书等断言与真实链行为一致。
+脚本分 10 组共 **78 项断言**（认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
+其他业务、链模式与合规判定、CBAM 合规），全部通过时退出码为 0。stub 模式下会播种演示证书，
+因此防伪码核验、示例证书等断言与真实链行为一致；CBAM 组依赖 `09_cbam.sql` 的种子数据。
 
 ---
 
