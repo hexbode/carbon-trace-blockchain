@@ -445,7 +445,17 @@ public class WebaseChainGateway implements ChainGateway {
             return findByCertId(cached.get());
         }
         // 2) 历史交易：解析回执里的调用入参（certify 的首个参数即认证编号）
-        JsonNode receipt = client.get("/" + groupId() + "/web3/transactionReceipt/" + txHash.trim());
+        JsonNode receipt;
+        try {
+            receipt = client.get("/" + groupId() + "/web3/transactionReceipt/" + txHash.trim());
+        } catch (ApiException e) {
+            // WeBASE-Front 对不存在的交易返回 HTTP 422 + {code:201510, errorMessage:"transaction receipt of this hash not exist"}
+            // 这是「未命中」而不是基础设施故障：按不存在处理，让 findAny 继续走防伪码路径。
+            if (isReceiptNotFound(e.getMessage())) {
+                return Optional.empty();
+            }
+            throw e;
+        }
         long blockNumber = TransHandleReceipt.parseNumber(text(receipt, "blockNumber"));
         if (blockNumber < 0) {
             return Optional.empty();
@@ -480,7 +490,29 @@ public class WebaseChainGateway implements ChainGateway {
             return byTxHash.isPresent() ? byTxHash : findByFingerprint(value);
         }
         Optional<ChainCertificate> byFingerprint = findByFingerprint(value);
-        return byFingerprint.isPresent() ? byFingerprint : findByTxHash(value);
+        if (byFingerprint.isPresent()) {
+            return byFingerprint;
+        }
+        // 只有形态像交易哈希时才回执查询；证书编号 / 防伪码等普通字符串不再触发 422
+        return TX_HASH_PATTERN.matcher(value).matches() ? findByTxHash(value) : Optional.empty();
+    }
+
+    /**
+     * 判断异常是否为「交易回执不存在」。
+     *
+     * WeBASE-Front 3.x 对未知哈希返回 HTTP 422，响应体 {@code {"code":201510,
+     * "errorMessage":"transaction receipt of this hash not exist"}}；这里按错误码与关键字识别，
+     * 避免把真正的链故障误判为「未找到」。
+     *
+     * @param message 异常消息，可为 null
+     * @return true 表示回执不存在
+     */
+    private static boolean isReceiptNotFound(String message) {
+        if (message == null) {
+            return false;
+        }
+        String text = message.toLowerCase();
+        return text.contains("201510") || text.contains("receipt of this hash not exist");
     }
 
     /**
