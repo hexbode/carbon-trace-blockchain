@@ -28,11 +28,7 @@
 -- 【幂等性】
 --   可重复执行：MODIFY COLUMN 重复执行结果一致；仅放宽约束 / 放宽长度，
 --   不修改数据，不影响索引、外键与字符集。
---
--- 【已下线链表提示】
---   第 6、7 节针对 `blocks` / `block_transactions`，这两张表属早期模拟链表，
---   实际库（11 张表）中不存在。若按实库执行，这两节会报 ERROR 1146，
---   需先按实库结构删去对应小节，或先恢复链表建表。
+--   早期本地模拟链表 blocks / block_transactions 已下线，本文件不再对齐这两张表。
 -- ============================================================
 
 -- 1. 企业信息表
@@ -69,23 +65,7 @@ ALTER TABLE `emission_records`
   MODIFY COLUMN `created_at`    DATETIME    DEFAULT NULL COMMENT '提交时间',
   MODIFY COLUMN `reporter`      VARCHAR(50) DEFAULT NULL COMMENT '填报人';
 
--- 6. 区块表
--- 【已下线链表】实库无 blocks 表时本小节会报 1146，执行前按需删去。
-ALTER TABLE `blocks`
-  MODIFY COLUMN `merkle_root` VARCHAR(70) DEFAULT NULL COMMENT '默克尔根',
-  MODIFY COLUMN `miner`       VARCHAR(50) DEFAULT NULL COMMENT '打包节点';
-
--- 7. 区块交易表
--- 【已下线链表】实库无 block_transactions 表时本小节会报 1146，执行前按需删去。
-ALTER TABLE `block_transactions`
-  MODIFY COLUMN `emission_id`     VARCHAR(20)   DEFAULT NULL COMMENT '关联排放记录编号',
-  MODIFY COLUMN `enterprise_name` VARCHAR(100)  DEFAULT NULL COMMENT '企业名称',
-  MODIFY COLUMN `period`          VARCHAR(10)   DEFAULT NULL COMMENT '报告期',
-  MODIFY COLUMN `amount`          DECIMAL(14,2) DEFAULT NULL COMMENT '排放量',
-  MODIFY COLUMN `fingerprint`     VARCHAR(70)   DEFAULT NULL COMMENT '电子防伪码',
-  MODIFY COLUMN `auditor`         VARCHAR(50)   DEFAULT NULL COMMENT '审核人';
-
--- 8. 异常告警表
+-- 6. 异常告警表
 ALTER TABLE `alerts`
   MODIFY COLUMN `enterprise_name` VARCHAR(100) DEFAULT NULL COMMENT '企业名称',
   MODIFY COLUMN `type_label`      VARCHAR(30)  DEFAULT NULL COMMENT '类型中文名',
@@ -93,7 +73,7 @@ ALTER TABLE `alerts`
   MODIFY COLUMN `period`          VARCHAR(10)  DEFAULT NULL COMMENT '涉及报告期',
   MODIFY COLUMN `created_at`      DATETIME     DEFAULT NULL COMMENT '触发时间';
 
--- 9. 监管机构表
+-- 7. 监管机构表
 ALTER TABLE `regulator_organizations`
   MODIFY COLUMN `region`     VARCHAR(50)  DEFAULT NULL COMMENT '所属区域',
   MODIFY COLUMN `contact`    VARCHAR(50)  DEFAULT NULL COMMENT '联系人',

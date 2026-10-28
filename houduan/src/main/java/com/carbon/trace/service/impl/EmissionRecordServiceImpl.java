@@ -146,9 +146,10 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
      * 新增排放填报（事务）。
      * 处理链路：校验必填项与排放源 → 排放量 = 活动数据 × 因子（保留 2 位小数）→ 生成 12 位电子防伪码
      * → 取一个链上未被占用的编号（三表同号）→ 插入排放记录 → 派生同号报告记录（pending）
-     * → 写入时合规判定生成告警 → 注册事务提交后的合规镜像上链。
-     * 链上副作用：事务提交后同步本期合计、年度合计与最近使用因子镜像（配额与因子规则依赖）；
-     * 失败按退避重试，最终失败生成 chain_failed 告警，本地数据仍保留。
+     * → 注册事务提交后的并行任务：合规判定生成告警 + 合规镜像上链。
+     * 链上副作用：事务提交后并行执行「链上合规判定」与「本期合计 / 年度合计 / 最近因子镜像写链」，
+     * 两条任务互不依赖，响应只等待最慢的一条；各自失败按退避重试，最终失败生成 chain_failed 告警，
+     * 本地数据仍保留。
      *
      * @param body 请求体，必填 enterpriseId、period、sourceCode、activityData；
      *             enterpriseName 可空（缺失时按 enterpriseId 从企业表补全）
@@ -234,12 +235,18 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
             reportRecordMapper.insert(report);
         }
 
-        // 写入时判定：合规规则由链上合约执行，按判定结果生成异常告警（链不可用时回退本地规则）
-        alertService.evaluateOnEmissionCreate(record);
-
-        // 链上合规镜像（本期合计 / 年度合计 / 最近使用因子）在事务提交后同步，供配额与因子规则使用
-        chainSyncService.afterCommit("合规镜像同步上链", record.getEnterpriseId(), record.getEnterpriseName(),
-                record.getPeriod(), () -> complianceService.syncMirrors(record));
+        // 提交后并行执行两条互不依赖的任务，响应只需等待最慢的一条：
+        //  1. 合规判定并生成异常告警（链上 checkAll，不可用时回退本地规则）；
+        //  2. 链上合规镜像（本期合计 / 年度合计 / 最近使用因子），供配额与因子规则使用。
+        // 判定放在提交后，是因为镜像写链与告警判定都要读已提交的合计数据；
+        // 两条任务独立重试、独立失败告警，任一失败不影响另一条。
+        chainSyncService.afterCommitAll(record.getEnterpriseId(), record.getEnterpriseName(), record.getPeriod(),
+                List.of(
+                        new ChainSyncService.ChainJob("排放合规判定",
+                                () -> alertService.evaluateOnEmissionCreate(record)),
+                        new ChainSyncService.ChainJob("合规镜像同步上链",
+                                () -> complianceService.syncMirrors(record))
+                ));
 
         return record;
     }
@@ -287,12 +294,22 @@ public class EmissionRecordServiceImpl implements EmissionRecordService {
      *  2. 链上占用检查（锁外，单次约 2 秒）——链上只追加不删除，编号一旦上链就不能复用，
      *     否则新认证会与链上遗留的「已撤销 / 已作废」存证同号而无法上链。
      *
+     * 快路径：逻辑合约 V2 提供 highestCertSeq() 时，序号大于链上最高值的编号必然未上链，
+     * 可直接跳过逐号链查询；仅当序号不超过链上最高值（可能命中历史编号）时才回链确认。
+     * 该视图不可用（V1 / 链异常）时返回 -1，完整回退到逐号查询，保证编号不复用。
+     *
      * 取号用进程内自增计数器而不是 selectCount：并发事务彼此看不到对方未提交的插入，
      * 按总数推算会让多个请求算出同一个编号并撞主键（实测 6 并发只成功 1 个）。
      */
     private String allocateRecordId() {
         while (true) {
             String id = nextUnusedId();
+            long seq = seqOf(id);
+            long chainMaxSeq = chainGateway.highestCertSeq();
+            // 候选序号高于链上最高序号：不可能与历史存证同号，无需逐号回链
+            if (chainMaxSeq >= 0 && seq > chainMaxSeq) {
+                return id;
+            }
             if (chainGateway.findByEmissionId(id).isEmpty()) {
                 return id;
             }

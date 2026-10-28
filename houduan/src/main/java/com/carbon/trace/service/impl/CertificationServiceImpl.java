@@ -49,6 +49,14 @@ public class CertificationServiceImpl implements CertificationService {
     private final ComplianceService complianceService;
     private final ChainTxLocator txLocator;
 
+    /** 示例证书固定 3 张；链上信息 60 秒内复用，避免公共查询页每次加载都等待链调用 */
+    private static final long SAMPLE_CHAIN_CACHE_TTL_MS = 60_000L;
+    private static final List<String> SAMPLE_CERT_IDS = List.of("CR000001", "CR000002", "CR000003");
+    /** 示例证书链上信息缓存（进程内）；空表示尚未加载 */
+    private volatile Map<String, ChainCertificate> sampleChainCache = Map.of();
+    /** 最近一次缓存写入时间（毫秒），用于 TTL 判定 */
+    private volatile long sampleChainCachedAt = 0L;
+
     public CertificationServiceImpl(CertificationRecordMapper certificationRecordMapper,
                                     ChainGateway chainGateway,
                                     ChainSyncService chainSyncService,
@@ -148,9 +156,9 @@ public class CertificationServiceImpl implements CertificationService {
         // 固定返回 3 张演示证书，接口无参数，公众无法借此遍历其他认证记录
         List<CertificationRecord> list = certificationRecordMapper.selectList(
                 new LambdaQueryWrapper<CertificationRecord>()
-                        .in(CertificationRecord::getId, List.of("CR000001", "CR000002", "CR000003"))
+                        .in(CertificationRecord::getId, SAMPLE_CERT_IDS)
                         .orderByAsc(CertificationRecord::getId));
-        fillChainInfo(list);
+        fillSampleChainInfo(list);
         return list;
     }
 
@@ -351,6 +359,51 @@ public class CertificationServiceImpl implements CertificationService {
         Map<String, ChainCertificate> chainCertByEmission = chainGateway.certificatesByEmissionIds(emissionIds);
         for (CertificationRecord record : records) {
             applyChainInfo(record, chainCertByEmission.get(record.getEmissionId()));
+        }
+    }
+
+    /**
+     * 示例证书的链上信息回填（带 60 秒进程内缓存）。
+     *
+     * 单次链读约 2 秒，3 张示例证书即使并行也要约 2 秒；示例编号固定不变，
+     * 其防伪码/交易哈希/区块高度属于不可变展示字段，因此短 TTL 缓存不会影响状态核验：
+     * 真正的证书状态查询（by-fingerprint / 监管端列表）仍实时回链。
+     *
+     * 并发保护：多个请求同时过期时只允许一个线程刷新，其余线程复用刷新结果。
+     *
+     * @param records 待回填的示例认证记录
+     */
+    private void fillSampleChainInfo(List<CertificationRecord> records) {
+        if (records == null || records.isEmpty()) {
+            return;
+        }
+        Map<String, ChainCertificate> chainInfo = currentSampleChainInfo();
+        for (CertificationRecord record : records) {
+            // 链上以认证编号为唯一键（record.id），不依赖 emission_id 与 id 恰好相等
+            applyChainInfo(record, chainInfo.get(record.getId()));
+        }
+    }
+
+    /**
+     * 读取示例证书的链上信息，命中 60 秒缓存时不再回链。
+     *
+     * @return 认证编号 → 链上凭证映射；链不可达时抛出链层异常
+     */
+    private Map<String, ChainCertificate> currentSampleChainInfo() {
+        long now = System.currentTimeMillis();
+        Map<String, ChainCertificate> cached = sampleChainCache;
+        if (!cached.isEmpty() && now - sampleChainCachedAt < SAMPLE_CHAIN_CACHE_TTL_MS) {
+            return cached;
+        }
+        synchronized (this) {
+            now = System.currentTimeMillis();
+            if (!sampleChainCache.isEmpty() && now - sampleChainCachedAt < SAMPLE_CHAIN_CACHE_TTL_MS) {
+                return sampleChainCache;
+            }
+            Map<String, ChainCertificate> loaded = chainGateway.certificatesByEmissionIds(SAMPLE_CERT_IDS);
+            sampleChainCache = loaded;
+            sampleChainCachedAt = now;
+            return loaded;
         }
     }
 

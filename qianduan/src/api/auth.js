@@ -8,14 +8,26 @@
 import request from '@/utils/request'
 
 /**
- * 登录：返回 { token, user }
+ * 登录：返回 { token, user, mustChangePassword }
  *
  * 接口：POST /auth/login（后端完整路径 /api/auth/login）
  * @param {Object} data 请求体 { username, password, role }，role 须与账号实际角色一致
- * @returns {Promise<{token: string, user: Object}>} JWT 令牌与用户信息
+ * @returns {Promise<{token: string, user: Object, mustChangePassword: boolean}>}
+ *          JWT 令牌、用户信息与强制改密标记
  * @permission 无需登录（登录接口位于后端拦截器白名单）
  */
 export const login = (data) => request.post('/auth/login', data)
+
+/**
+ * 修改当前登录用户密码（首次登录强制改密页专用）
+ *
+ * 接口：POST /auth/change-password
+ * @param {Object} data 请求体 { oldPassword, newPassword }
+ *                      新密码需 ≥ 8 位并同时包含大写字母、小写字母与数字，且不得为 123456
+ * @returns {Promise<Object>} 空对象；成功后须清理本地登录态并重新登录
+ * @permission 需登录；mustChangePassword=true 的令牌仍可调用本接口
+ */
+export const changePassword = (data) => request.post('/auth/change-password', data)
 
 /**
  * 当前登录用户

@@ -1,0 +1,539 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address[]",
+        "name": "initialWriters",
+        "type": "address[]"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "previousLogic",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "newLogic",
+        "type": "address"
+      }
+    ],
+    "name": "LogicChanged",
+    "type": "event"
+  },
+  {
+    "inputs": [],
+    "name": "STATUS_INVALID",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "STATUS_NONE",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "STATUS_REVOKED",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "STATUS_VALID",
+    "outputs": [
+      {
+        "internalType": "uint8",
+        "name": "",
+        "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "fpHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "certIdHashOfFingerprint",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "blockNumber",
+        "type": "uint256"
+      }
+    ],
+    "name": "certIdsInBlock",
+    "outputs": [
+      {
+        "internalType": "string[]",
+        "name": "",
+        "type": "string[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "certIdHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "certificateOf",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "certId",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "enterpriseId",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "enterpriseName",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "period",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "amountScaled",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "fingerprint",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "auditor",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "reason",
+            "type": "string"
+          },
+          {
+            "internalType": "uint16",
+            "name": "complianceFlags",
+            "type": "uint16"
+          },
+          {
+            "internalType": "uint64",
+            "name": "createdBlock",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint64",
+            "name": "createdAt",
+            "type": "uint64"
+          },
+          {
+            "internalType": "uint8",
+            "name": "status",
+            "type": "uint8"
+          },
+          {
+            "internalType": "bool",
+            "name": "exists",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct CertRegistryData.Certificate",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "counts",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "total",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "valid",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "revoked",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "invalid",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "invalidCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "logic",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "owner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "revokedCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "certIdHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint8",
+        "name": "status",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "reason",
+        "type": "string"
+      }
+    ],
+    "name": "setCertificateStatus",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "total",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "valid",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "revoked",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "invalid",
+        "type": "uint256"
+      }
+    ],
+    "name": "setCounts",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "allowed",
+        "type": "bool"
+      }
+    ],
+    "name": "setWriter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "totalCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newOwner",
+        "type": "address"
+      }
+    ],
+    "name": "transferOwner",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "newLogic",
+        "type": "address"
+      }
+    ],
+    "name": "updateLogic",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "validCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "certIdHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "string",
+        "name": "enterpriseId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "enterpriseName",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "period",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountScaled",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "fingerprint",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "auditor",
+        "type": "string"
+      },
+      {
+        "internalType": "uint16",
+        "name": "complianceFlags",
+        "type": "uint16"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "fpHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "writeCertificateContent",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "certIdHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "string",
+        "name": "certId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "enterpriseId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "enterpriseName",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "period",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amountScaled",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "fingerprint",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "auditor",
+        "type": "string"
+      },
+      {
+        "internalType": "uint16",
+        "name": "complianceFlags",
+        "type": "uint16"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "fpHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "writeNewCertificate",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "writers",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

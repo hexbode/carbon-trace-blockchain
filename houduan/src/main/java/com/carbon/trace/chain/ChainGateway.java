@@ -104,6 +104,29 @@ public interface ChainGateway {
     Optional<ChainCertificate> findByEmissionId(String emissionId);
 
     /**
+     * 读取认证时写入链上的合规判定位掩码快照。
+     *
+     * 该快照只在上链（certify）时写入，之后不随排放数据或合规规则变化；
+     * 与证书查询分开调用，避免每次普通证书查询都多付一次链调用。
+     *
+     * @param certId 认证编号；空或不存在时返回 0
+     * @return 16 位位掩码（bit0 配额 / bit1 环比 / bit2 漏填 / bit3 因子 / bit4 迟报）
+     */
+    int complianceFlagsOf(String certId);
+
+    /**
+     * 链上已出现的最高认证序号（认证编号 "CR" 后的数字部分）。
+     *
+     * 编号按序号递增分配：新编号序号大于该值时，必然未在链上出现过，调用方可跳过逐号查询。
+     * 返回值语义：
+     *  - ≥ 0：当前逻辑合约给出的最高序号（0 表示链上尚无认证）；
+     *  - -1：当前逻辑合约未提供该视图（如仍为 V1）或链读取失败，调用方必须回退到逐号检查。
+     *
+     * @return 最高认证序号，或 -1 表示不可用
+     */
+    long highestCertSeq();
+
+    /**
      * 按交易哈希查询。
      *
      * 输入忽略大小写与 {@code 0x} 前缀；真实链需先定位交易（缓存或解析回执入参），
@@ -117,8 +140,8 @@ public interface ChainGateway {
     /**
      * 兼容旧语义：入参是电子防伪码（大小写敏感精确匹配）或交易哈希（忽略大小写与 0x 前缀）。
      *
-     * 先按防伪码查，未命中再按交易哈希查；两条路径的判定口径分别与
-     * {@link #findByFingerprint(String)}、{@link #findByTxHash(String)} 一致。
+     * 按输入形态优先尝试：64 位十六进制先走交易哈希，其余先走防伪码；未命中再尝试另一条路径。
+     * 这样可避免「交易哈希先被当成防伪码查一次」的必然失败链调用。
      *
      * @param fingerprintOrTxHash 电子防伪码或交易哈希
      * @return 命中的凭证；两者都未命中时返回空 Optional

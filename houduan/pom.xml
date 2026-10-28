@@ -108,6 +108,12 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
+                    <!--
+                      关闭增量编译：IDE 语言服务器会把带编译错误的 .class 写进 target/classes，
+                      Maven 增量编译可能因时间戳而跳过重编译，把这些「运行时报 Unresolved compilation problem」
+                      的类打进 jar。强制每次用 javac 全量编译，保证打包产物一定来自真实源码。
+                    -->
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>org.projectlombok</groupId>

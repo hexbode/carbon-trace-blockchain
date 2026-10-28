@@ -101,8 +101,8 @@ public class UserController {
      * POST /api/users —— 新建用户。
      *
      * 权限：仅 regulator / admin。
-     * 参数（JSON body）：User 实体，username / role 必填；password 缺省时写入初始密码 123456 的 BCrypt 哈希；
-     * status 缺省 active；createdAt 由服务端补当日。
+     * 参数（JSON body）：User 实体，username / role 必填；password 缺省时写入初始密码 123456 的
+     * BCrypt 哈希并置强制改密标志；status 缺省 active；createdAt 由服务端补当日。
      * 返回：落库后的 User（含自增 id，不含密码）。
      * 错误码：400 账号重复（唯一键冲突）；401 未登录；403 角色不足；500 未知异常。
      * 链上写：无（用户账号不属于链上存证对象）。
@@ -150,7 +150,7 @@ public class UserController {
      *
      * 权限：仅 regulator / admin（用于用户忘记密码时管理员代操作）。
      * 参数：路径 id 为目标用户主键。
-     * 返回：重置后的 User（密码不回显）。
+     * 返回：重置后的 User（密码不回显）；该账号下次登录会被强制改密。
      * 错误码：401 未登录；403 角色不足；404 用户不存在。
      * 链上写：无；副作用仅限数据库与当前进程内的登录失败计数清零。
      */
@@ -164,9 +164,10 @@ public class UserController {
      * PUT /api/users/{id}/password —— 修改密码。
      *
      * 权限：本人或 regulator / admin（requireSelfOrManager）。
-     * 参数：路径 id 为目标用户主键；body {oldPassword, newPassword}，新密码去空白后需 ≥ 6 位。
+     * 参数：路径 id 为目标用户主键；body {oldPassword, newPassword}，
+     * 新密码需 ≥ 8 位并同时包含大写字母、小写字母与数字，且不得为初始密码 123456。
      * 返回：空 Map。
-     * 错误码：400 旧密码不符或新密码为空/过短；401 未登录；403 越权；404 用户不存在。
+     * 错误码：400 旧密码不符或新密码不合规；401 未登录；403 越权；404 用户不存在。
      * 链上写：无。
      */
     @PutMapping("/{id}/password")

@@ -90,9 +90,10 @@ carbon:
       timeout-ms: 15000
     contracts:
       registry:
-        name: CarbonCertRegistry
+        # 逻辑与数据分离后，backend 只调用逻辑合约；数据合约地址仅用于治理（updateLogic）
+        name: CertRegistryLogicV2
         address: ${CARBON_CHAIN_REGISTRY_ADDRESS:}
-        abi-location: classpath:chain/CarbonCertRegistry.abi.json
+        abi-location: classpath:chain/CertRegistryLogic.abi.json
       compliance:
         name: CarbonCompliance
         address: ${CARBON_CHAIN_COMPLIANCE_ADDRESS:}

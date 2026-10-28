@@ -33,6 +33,9 @@ public class UserServiceImpl implements UserService {
 
     private static final String DEFAULT_PASSWORD = "123456";
 
+    /** 新密码最小长度：强制改密策略要求 ≥ 8 位，并同时包含大小写字母与数字 */
+    private static final int MIN_PASSWORD_LENGTH = 8;
+
     /** 登录失败锁定：同一账号连续失败上限 */
     private static final int MAX_LOGIN_FAILURES = 5;
     /** 达到上限后的锁定时长（毫秒） */
@@ -115,10 +118,16 @@ public class UserServiceImpl implements UserService {
     @Override
     public User create(User user) {
         // 密码统一以 BCrypt（含 {bcrypt} 前缀）入库，历史明文由启动迁移处理
-        if (!StringUtils.hasText(user.getPassword())) {
+        boolean defaultPassword = !StringUtils.hasText(user.getPassword());
+        if (defaultPassword) {
             user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
+            // 新建账号使用统一初始密码时强制首次登录改密，避免弱密码长期留存
+            user.setMustChangePassword(true);
         } else {
             user.setPassword(PasswordHasher.encode(user.getPassword()));
+            if (user.getMustChangePassword() == null) {
+                user.setMustChangePassword(false);
+            }
         }
         if (!StringUtils.hasText(user.getStatus())) {
             user.setStatus("active");
@@ -224,24 +233,29 @@ public class UserServiceImpl implements UserService {
         // 管理员重置：写入统一默认密码，并解除该账号的登录失败暂时锁定
         User user = getById(id);
         user.setPassword(PasswordHasher.encode(DEFAULT_PASSWORD));
+        // 重置后强制用户下次登录改密，避免管理员代设的弱密码长期有效
+        user.setMustChangePassword(true);
         userMapper.updateById(user);
         loginFails.remove(user.getUsername());
         return user;
     }
 
     /**
-     * 修改密码：校验旧密码与长度约束后写入新密码的 BCrypt 哈希。
+     * 修改密码：校验旧密码与密码强度后写入新密码的 BCrypt 哈希，并清除强制改密标志。
      *
      * 旧密码经 PasswordHasher.matches 校验，同时兼容 {bcrypt} 哈希与迁移前的明文存储；
-     * 新密码去除首尾空白后不足 6 位视为非法（避免弱口令与全空白密码）。
-     * 改密成功即清除该账号的连续失败计数（相当于本人已完成身份验证）。
+     * 新密码去除首尾空白后必须满足：长度 ≥ 8、同时包含大写字母/小写字母/数字、
+     * 且不得与初始密码 123456 相同（强制改密场景下弱密码等于没改）。
+     * 改密成功即清除该账号的连续失败计数，并把 must_change_password 置 0；
+     * 已签发的旧令牌仍带 mustChangePassword=true 声明，由 AuthInterceptor 继续拦截，
+     * 因此前端必须清理本地令牌并重新登录，等价于让旧弱密码会话失效。
      *
      * 权限：控制器限制本人或 regulator / admin。
      *
      * @param id          用户主键
      * @param oldPassword 原密码（明文）
-     * @param newPassword 新密码（明文，去空白后长度 ≥ 6）
-     * @throws ApiException 用户不存在抛 404；旧密码不符、新密码为空或过短抛 400
+     * @param newPassword 新密码（明文，满足强度策略）
+     * @throws ApiException 用户不存在抛 404；旧密码不符、新密码不合规抛 400
      */
     @Override
     public void changePassword(Integer id, String oldPassword, String newPassword) {
@@ -250,12 +264,58 @@ public class UserServiceImpl implements UserService {
         if (!PasswordHasher.matches(oldPassword, user.getPassword())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "当前密码不正确");
         }
-        if (!StringUtils.hasText(newPassword) || newPassword.trim().length() < 6) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "新密码不能为空且长度不能少于 6 位");
-        }
-        user.setPassword(PasswordHasher.encode(newPassword));
+        String password = validateNewPassword(newPassword);
+        user.setPassword(PasswordHasher.encode(password));
+        // 改密成功即解除强制改密：数据库标志清零，后续重新登录签发的新令牌不再携带该声明
+        user.setMustChangePassword(false);
         userMapper.updateById(user);
         loginFails.remove(user.getUsername());
+    }
+
+    /**
+     * 校验新密码强度并返回去除首尾空白后的密码。
+     *
+     * 规则（与前端提示保持一致）：
+     *   1. 长度 ≥ 8 位；
+     *   2. 不能使用初始密码 123456；
+     *   3. 同时包含大写字母、小写字母与数字，避免“长但简单”的弱口令。
+     *
+     * @param newPassword 明文新密码
+     * @return 去除首尾空白后的密码，用于 BCrypt 编码
+     * @throws ApiException 不满足任一规则时抛 400
+     */
+    private String validateNewPassword(String newPassword) {
+        String password = newPassword == null ? "" : newPassword.trim();
+        if (password.length() < MIN_PASSWORD_LENGTH) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "新密码长度不能少于 8 位");
+        }
+        if (DEFAULT_PASSWORD.equals(password)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "新密码不能使用初始密码 123456");
+        }
+        boolean hasUpper = password.chars().anyMatch(Character::isUpperCase);
+        boolean hasLower = password.chars().anyMatch(Character::isLowerCase);
+        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
+        if (!hasUpper || !hasLower || !hasDigit) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "新密码需同时包含大写字母、小写字母和数字");
+        }
+        return password;
+    }
+
+    /**
+     * 修改当前登录用户密码（强制改密页专用入口，账号取自令牌，不接受客户端传入用户 id）。
+     *
+     * @param username    当前登录账号（来自 AuthInterceptor 解析的 JWT）
+     * @param oldPassword 原密码
+     * @param newPassword 新密码
+     * @throws ApiException 账号不存在抛 404；原密码不符或新密码不合规抛 400
+     */
+    @Override
+    public void changeOwnPassword(String username, String oldPassword, String newPassword) {
+        User user = findByUsername(username);
+        if (user == null) {
+            throw new ApiException(HttpStatus.NOT_FOUND, "用户不存在");
+        }
+        changePassword(user.getId(), oldPassword, newPassword);
     }
 
     /**
@@ -328,6 +388,8 @@ public class UserServiceImpl implements UserService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("token", token);
         result.put("user", userInfo);
+        // 强制改密标记：前端据此在不进入业务布局的前提下跳转改密页
+        result.put("mustChangePassword", Boolean.TRUE.equals(user.getMustChangePassword()));
         return result;
     }
 

@@ -92,7 +92,7 @@
 
         <!-- 演示账号区：点击快捷填充，并提供公共查询端入口 -->
         <div class="demo-hint">
-          <div class="hint-title">演示账号（密码均为 123456）</div>
+          <div class="hint-title">演示账号（初始密码均为 123456，首次登录需改密）</div>
           <div class="hint-list">
             <span @click="fillDemo('enterprise01')">enterprise01</span>
             <span @click="fillDemo('auditor01')">auditor01</span>
@@ -172,12 +172,19 @@ async function handleLogin() {
   if (!valid) return
   loading.value = true
   try {
-    const { token, user } = await login({
+    const { token, user, mustChangePassword } = await login({
       username: form.username,
       password: form.password,
       role: form.role
     })
-    userStore.login(user, token)
+    // 把强制改密标记并入用户快照，供路由守卫在刷新后继续拦截
+    userStore.login({ ...user, mustChangePassword: !!mustChangePassword }, token)
+    // 强制改密会话不进入任何业务布局，直接跳转改密页
+    if (mustChangePassword) {
+      ElMessage.warning('首次登录请先修改初始密码')
+      router.push('/change-password')
+      return
+    }
     ElMessage.success('登录成功')
     // 各角色登录后跳转首页映射
     const redirectMap = { enterprise: '/enterprise/home', auditor: '/auditor/home', regulator: '/regulator/home', admin: '/regulator/home' }

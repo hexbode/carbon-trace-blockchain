@@ -36,7 +36,7 @@ public interface UserService {
     User getById(Integer id);
 
     /**
-     * 新增用户；密码为空时使用默认密码 123456，状态默认 active，注册日期默认当日。
+     * 新增用户；密码为空时使用默认密码 123456 并强制首次登录改密，状态默认 active，注册日期默认当日。
      * 密码统一以 BCrypt 哈希落库；服务层不显式校验账号唯一性，需依赖库约束或调用方保证。
      * 权限：仅 regulator / admin。
      *
@@ -68,7 +68,7 @@ public interface UserService {
     void delete(Integer id);
 
     /**
-     * 重置指定用户密码为初始值 123456（BCrypt 存储），并解除该账号的内存登录失败锁定。
+     * 重置指定用户密码为初始值 123456（BCrypt 存储），置强制改密标志并解除该账号的内存登录失败锁定。
      * 权限：仅 regulator / admin；单表更新，无链上副作用。
      *
      * @param id 用户主键
@@ -78,15 +78,26 @@ public interface UserService {
     User resetPassword(Integer id);
 
     /**
-     * 修改密码：校验旧密码与库中当前值一致，成功后写入新密码并解除登录失败锁定。
+     * 修改密码：校验旧密码与库中当前值一致，成功后写入新密码、清除强制改密标志并解除登录失败锁定。
+     * 新密码须满足：长度 ≥ 8、同时包含大写字母/小写字母/数字，且不得与初始密码 123456 相同。
      * 权限：本人或 regulator / admin（Controller 校验）。
      *
      * @param id          用户主键
      * @param oldPassword 旧密码（与库中哈希比对）
-     * @param newPassword 新密码，不能为空且长度不少于 6 位
+     * @param newPassword 新密码（满足强度策略）
      * @throws com.carbon.trace.common.ApiException 用户不存在时抛出 404；旧密码不符或新密码不合规时抛出 400
      */
     void changePassword(Integer id, String oldPassword, String newPassword);
+
+    /**
+     * 修改当前登录用户密码（强制改密页专用，账号取自 JWT，不接受客户端传入用户 id）。
+     *
+     * @param username    当前登录账号
+     * @param oldPassword 原密码
+     * @param newPassword 新密码（满足强度策略）
+     * @throws com.carbon.trace.common.ApiException 账号不存在时抛出 404；原密码不符或新密码不合规时抛出 400
+     */
+    void changeOwnPassword(String username, String oldPassword, String newPassword);
 
     /**
      * 按账号精确查询用户（登录/去重用）；账号为空或不存在时返回 null。
@@ -99,12 +110,14 @@ public interface UserService {
     /**
      * 登录：校验账号 + 密码 + 角色 + 状态四要素，成功生成 JWT。
      * 任一要素不匹配统一返回 400；连续失败 5 次后锁定 5 分钟并返回 429（内存计数，重启清空）。
+     * 返回体额外携带 mustChangePassword：为 true 时前端必须跳转改密页，
+     * 且该令牌在拦截器层只能访问改密与退出接口。
      * 权限：登录接口公开（无需登录态）。
      *
      * @param username 登录账号
      * @param password 登录密码（与库中 BCrypt 哈希比对）
      * @param role     期望登录的角色，必须与账号角色一致
-     * @return 登录结果 Map：token（JWT）、user（用户名/姓名/角色/企业/机构等载荷）
+     * @return 登录结果 Map：token（JWT）、user（用户名/姓名/角色/企业/机构等载荷）、mustChangePassword
      * @throws com.carbon.trace.common.ApiException 凭据不匹配时抛出 400；账号锁定时抛出 429
      */
     Map<String, Object> login(String username, String password, String role);

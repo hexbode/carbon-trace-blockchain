@@ -10,6 +10,7 @@ import com.carbon.trace.common.ApiException;
 import com.carbon.trace.entity.EmissionRecord;
 import com.carbon.trace.mapper.EmissionRecordMapper;
 import com.carbon.trace.service.ComplianceService;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -19,7 +20,14 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.YearMonth;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 合规判定服务实现。
@@ -37,6 +45,46 @@ public class ComplianceServiceImpl implements ComplianceService {
     private final ChainGateway chainGateway;
     private final ChainProperties properties;
     private final EmissionRecordMapper emissionRecordMapper;
+
+    /** 合规快照缓存 TTL：快照在认证时写入、之后不随排放数据变化，短缓存可避免重复两次链调用 */
+    private static final long FLAGS_CACHE_TTL_MS = 60_000L;
+    /** 防伪码 → 合规快照位掩码（进程内缓存） */
+    private final Map<String, FlagsEntry> fingerprintFlagsCache = new ConcurrentHashMap<>();
+
+    /** 合规快照缓存项：位掩码 + 写入时间（毫秒） */
+    private record FlagsEntry(int flags, long cachedAt) {
+    }
+
+    /**
+     * 合规链调用并发执行器（3 线程）：
+     *  - 本期合计、年度合计、因子记忆是三条互不依赖的链写，串行会让一次填报额外等待 3 次链调用；
+     *  - 阈值与迟报月数是一对独立的治理参数读取，并行可把首次读取从两次链调用压到一次。
+     * 并发写已在本环境验证（同一账户 3 笔交易均成功）；线程数保持较小，避免打满 WeBASE-Front。
+     */
+    private final ExecutorService complianceChainExecutor = Executors.newFixedThreadPool(3, runnable -> {
+        Thread thread = new Thread(runnable, "compliance-chain-call");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /** 治理参数快照缓存 TTL（30 秒）：阈值/迟报月数只在监管端手动修改时变化 */
+    private static final long THRESHOLD_CACHE_TTL_MS = 30_000L;
+    private volatile ThresholdSnapshot thresholdSnapshot;
+
+    /** 配额缓存 TTL（30 秒）：写入配额后立即失效，避免读到旧值 */
+    private static final long QUOTA_CACHE_TTL_MS = 30_000L;
+    private final Map<String, QuotaEntry> quotaCache = new ConcurrentHashMap<>();
+
+    /** 认证编号 → 合规快照位掩码缓存；快照只在上链时写入，60 秒内复用 */
+    private final Map<String, FlagsEntry> certificateFlagsCache = new ConcurrentHashMap<>();
+
+    /** 治理参数快照：环比阈值（基点）+ 迟报月数 + 缓存时间 */
+    private record ThresholdSnapshot(int thresholdBp, int lateReportMonths, long cachedAt) {
+    }
+
+    /** 配额缓存项：配额值 + 缓存时间（毫秒） */
+    private record QuotaEntry(BigDecimal quota, long cachedAt) {
+    }
 
     public ComplianceServiceImpl(ChainGateway chainGateway,
                                  ChainProperties properties,
@@ -168,9 +216,18 @@ public class ComplianceServiceImpl implements ComplianceService {
      */
     @Override
     public int certificateFlags(String certId) {
-        return chainGateway.findByCertId(certId)
-                .map(cert -> cert.getComplianceFlags())
-                .orElse(0);
+        if (!StringUtils.hasText(certId)) {
+            return 0;
+        }
+        long now = System.currentTimeMillis();
+        FlagsEntry cached = certificateFlagsCache.get(certId);
+        if (cached != null && now - cached.cachedAt() < FLAGS_CACHE_TTL_MS) {
+            return cached.flags();
+        }
+        // 快照位掩码不在证书 12 元组中，必须单独调用合约 complianceOf
+        int flags = chainGateway.complianceFlagsOf(certId);
+        certificateFlagsCache.put(certId, new FlagsEntry(flags, now));
+        return flags;
     }
 
     /**
@@ -184,9 +241,21 @@ public class ComplianceServiceImpl implements ComplianceService {
      */
     @Override
     public int flagsForFingerprint(String fingerprint) {
-        return chainGateway.findByFingerprint(fingerprint)
-                .map(cert -> cert.getComplianceFlags())
+        if (!StringUtils.hasText(fingerprint)) {
+            return 0;
+        }
+        String key = fingerprint.trim();
+        long now = System.currentTimeMillis();
+        FlagsEntry cached = fingerprintFlagsCache.get(key);
+        if (cached != null && now - cached.cachedAt() < FLAGS_CACHE_TTL_MS) {
+            return cached.flags();
+        }
+        // 先按防伪码定位认证编号（链上大小写敏感），再单独读取该编号的合规快照
+        int flags = chainGateway.findByFingerprint(key)
+                .map(cert -> chainGateway.complianceFlagsOf(cert.getCertId()))
                 .orElse(0);
+        fingerprintFlagsCache.put(key, new FlagsEntry(flags, now));
+        return flags;
     }
 
     /**
@@ -205,10 +274,13 @@ public class ComplianceServiceImpl implements ComplianceService {
                 || !StringUtils.hasText(record.getPeriod())) {
             return;
         }
-        syncTotals(record.getEnterpriseId(), record.getPeriod());
+        List<Runnable> writes = new ArrayList<>(3);
+        addTotalWrites(writes, record.getEnterpriseId(), record.getPeriod());
         if (record.getEmissionFactor() != null && StringUtils.hasText(record.getSourceCode())) {
-            chainGateway.rememberFactor(record.getEnterpriseId(), record.getSourceCode(), record.getEmissionFactor());
+            writes.add(() -> chainGateway.rememberFactor(record.getEnterpriseId(), record.getSourceCode(),
+                    record.getEmissionFactor()));
         }
+        runWrites(writes);
     }
 
     /**
@@ -225,18 +297,64 @@ public class ComplianceServiceImpl implements ComplianceService {
         if (!StringUtils.hasText(enterpriseId) || !StringUtils.hasText(period)) {
             return;
         }
-        syncTotals(enterpriseId, period);
+        List<Runnable> writes = new ArrayList<>(2);
+        addTotalWrites(writes, enterpriseId, period);
+        runWrites(writes);
     }
 
     /**
-     * 重算并覆盖链上的本期合计与年度合计镜像。
+     * 把「本期合计 / 年度合计」两条链写加入任务列表。
      *
-     * 两个镜像分别服务环比与配额规则，均以数据库当前数据为准全量覆盖，保证删除后不残留旧值。
+     * 合计值先从数据库算好再提交，避免并发线程里再做数据库聚合；
+     * 两条写操作分别覆盖不同合约键，彼此无顺序依赖。
+     *
+     * @param writes       待执行写任务列表（就地追加）
+     * @param enterpriseId 企业编号
+     * @param period       报告期 YYYY-MM
      */
-    private void syncTotals(String enterpriseId, String period) {
+    private void addTotalWrites(List<Runnable> writes, String enterpriseId, String period) {
         int year = yearOf(period);
-        chainGateway.syncPeriodTotal(enterpriseId, period, sumAmount(enterpriseId, period));
-        chainGateway.syncYearTotal(enterpriseId, year, sumAmountInYear(enterpriseId, year));
+        BigDecimal periodTotal = sumAmount(enterpriseId, period);
+        BigDecimal yearTotal = sumAmountInYear(enterpriseId, year);
+        writes.add(() -> chainGateway.syncPeriodTotal(enterpriseId, period, periodTotal));
+        writes.add(() -> chainGateway.syncYearTotal(enterpriseId, year, yearTotal));
+    }
+
+    /**
+     * 并发执行一组链写，等待全部结束后再返回。
+     *
+     * 失败语义与串行版一致：任一条失败即抛出第一个异常，由 {@link com.carbon.trace.service.ChainSyncService}
+     * 对整组任务重试（镜像写是全量覆盖，重放幂等）；已经成功的写不会回滚，与原有串行实现的部分成功行为一致。
+     *
+     * @param writes 待执行写任务
+     */
+    private void runWrites(List<Runnable> writes) {
+        if (writes.isEmpty()) {
+            return;
+        }
+        List<CompletableFuture<Void>> futures = new ArrayList<>(writes.size());
+        for (Runnable write : writes) {
+            futures.add(CompletableFuture.runAsync(write, complianceChainExecutor));
+        }
+        RuntimeException failure = null;
+        for (CompletableFuture<Void> future : futures) {
+            try {
+                future.join();
+            } catch (CompletionException e) {
+                if (failure == null) {
+                    failure = e.getCause() instanceof RuntimeException runtime ? runtime : e;
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /** 容器关闭时停止合规链调用线程池，避免应用停止后仍有残留写链任务 */
+    @PreDestroy
+    public void shutdownChainExecutor() {
+        complianceChainExecutor.shutdown();
     }
 
     /**
@@ -250,7 +368,15 @@ public class ComplianceServiceImpl implements ComplianceService {
      */
     @Override
     public BigDecimal quotaOf(String enterpriseId, int year) {
-        return chainGateway.annualQuotaOf(enterpriseId, year);
+        String key = enterpriseId + "|" + year;
+        long now = System.currentTimeMillis();
+        QuotaEntry cached = quotaCache.get(key);
+        if (cached != null && now - cached.cachedAt() < QUOTA_CACHE_TTL_MS) {
+            return cached.quota();
+        }
+        BigDecimal quota = chainGateway.annualQuotaOf(enterpriseId, year);
+        quotaCache.put(key, new QuotaEntry(quota, now));
+        return quota;
     }
 
     /**
@@ -279,6 +405,8 @@ public class ComplianceServiceImpl implements ComplianceService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "配额必须为非负数");
         }
         chainGateway.setAnnualQuota(enterpriseId, year, quota);
+        // 写成功后立即清缓存，避免随后的回查读到旧配额
+        quotaCache.remove(enterpriseId + "|" + year);
     }
 
     /**
@@ -290,7 +418,7 @@ public class ComplianceServiceImpl implements ComplianceService {
      */
     @Override
     public int fluctuationThresholdBp() {
-        return chainGateway.fluctuationThresholdBp();
+        return thresholds().thresholdBp();
     }
 
     /**
@@ -310,6 +438,8 @@ public class ComplianceServiceImpl implements ComplianceService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "环比阈值非法（需大于 0 且不超过 10000 基点）");
         }
         chainGateway.setFluctuationThresholdBp(bp);
+        // 治理参数成对缓存，任一参数变更都必须整体失效，避免阈值与迟报月数不同步
+        thresholdSnapshot = null;
     }
 
     /**
@@ -321,7 +451,7 @@ public class ComplianceServiceImpl implements ComplianceService {
      */
     @Override
     public int lateReportMonths() {
-        return chainGateway.lateReportMonths();
+        return thresholds().lateReportMonths();
     }
 
     /**
@@ -341,6 +471,43 @@ public class ComplianceServiceImpl implements ComplianceService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "迟报月数非法（0~24）");
         }
         chainGateway.setLateReportMonths(months);
+        // 治理参数成对缓存，任一参数变更都必须整体失效
+        thresholdSnapshot = null;
+    }
+
+    /**
+     * 读取治理参数快照（环比阈值 + 迟报月数）。
+     *
+     * 两项参数相互独立，首次读取时并行请求链，再一起写入 30 秒缓存；
+     * 控制器先后调用 fluctuationThresholdBp() / lateReportMonths() 时第二次直接命中缓存。
+     *
+     * @return 治理参数快照；链不可达时抛出链层异常
+     */
+    private ThresholdSnapshot thresholds() {
+        long now = System.currentTimeMillis();
+        ThresholdSnapshot cached = thresholdSnapshot;
+        if (cached != null && now - cached.cachedAt() < THRESHOLD_CACHE_TTL_MS) {
+            return cached;
+        }
+        CompletableFuture<Integer> bpFuture = CompletableFuture.supplyAsync(
+                chainGateway::fluctuationThresholdBp, complianceChainExecutor);
+        CompletableFuture<Integer> monthsFuture = CompletableFuture.supplyAsync(
+                chainGateway::lateReportMonths, complianceChainExecutor);
+        ThresholdSnapshot snapshot = new ThresholdSnapshot(join(bpFuture), join(monthsFuture), now);
+        thresholdSnapshot = snapshot;
+        return snapshot;
+    }
+
+    /** 等待并发任务结果并展开异常，保持与串行实现一致的错误语义 */
+    private static <T> T join(CompletableFuture<T> future) {
+        try {
+            return future.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw e;
+        }
     }
 
     // ---------------- 内部：输入聚合 ----------------

@@ -108,13 +108,14 @@ if ($shortCommit) { Write-Host "  代码版本 = $shortCommit" }
 Write-Host '============================================' -ForegroundColor Cyan
 
 # ---------- 1/4 构建后端 ----------
-# package 会生成可执行 jar；-DskipTests 跳过单元测试（接口回归请单独运行 api-tests.ps1）
-Write-Host '[1/4] 构建后端（mvnw package）...' -ForegroundColor Cyan
+# clean package 会先清空 target，避免 IDE 语言服务器写入的带错误 .class 或已删除的旧资源被打进 jar；
+# -DskipTests 跳过单元测试（接口回归请单独运行 api-tests.ps1）
+Write-Host '[1/4] 构建后端（mvnw clean package）...' -ForegroundColor Cyan
 Push-Location $backendDir
 try {
-    & .\mvnw.cmd -q -DskipTests package
+    & .\mvnw.cmd -q -DskipTests clean package
     if ($LASTEXITCODE -ne 0) {
-        throw '后端构建失败（mvnw package 返回非 0）'
+        throw '后端构建失败（mvnw clean package 返回非 0）'
     }
 } finally {
     Pop-Location

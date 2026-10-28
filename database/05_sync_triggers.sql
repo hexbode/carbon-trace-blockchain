@@ -2,34 +2,26 @@
 -- 05_sync_triggers.sql —— 排放数据联动触发器
 --
 -- 【用途】
---   以 emission_records 为主表，维护「排放 → 报告 → 认证 → 链上交易」四张同号表的数据一致：
+--   以 emission_records 为主表，维护「排放 → 报告 → 认证」三张同号表的数据一致：
 --     新增排放记录 → 自动生成同号的报告记录（待审核）；
---     修改排放记录 → 把公共字段同步到报告/认证/链上交易；
---     删除排放记录 → 先删除其余三张表里同号的记录，再重算区块交易数。
+--     修改排放记录 → 把公共字段同步到报告/认证；
+--     删除排放记录 → 先删除其余两张表里同号的记录，再让主表完成删除。
 --
 -- 【执行顺序】
---   第 4 位，必须晚于 carbon_emission_db.sql（四张表与外键需已存在）。
+--   第 4 位，必须晚于 carbon_emission_db.sql（三张表与外键需已存在）。
 --   应在数据初始化完成后执行，避免历史数据绕过触发器。
 --
 -- 【依赖】
---   emission_records / report_records / certification_records 三表必须存在；
---   同步语句中还引用了 `blocks`、`block_transactions`（见下方【已下线链表】）。
+--   emission_records / report_records / certification_records 三表必须存在。
 --   执行账号需要 TRIGGER 权限；若开启 binlog 且未设置
 --   log_bin_trust_function_creators=1，还需 SUPER 权限。
 --
 -- 【幂等性】
 --   可重复执行：先 DROP TRIGGER IF EXISTS 再 CREATE，触发器定义总以本文件为准。
 --
--- 【已下线链表的重要提示】
---   `blocks`（区块表）与 `block_transactions`（区块交易表）是早期本地模拟链表，
---   链模式改造（stub / WeBASE）后后端不再读写。当前实际数据库为 11 张表，
---   其中并不包含这两张表。
---   因此本文件现状与实库存在结构性偏差：
---     · 触发器 trg_emission_au 中同步 block_transactions 的 UPDATE；
---     · 触发器 trg_emission_bd 中删除 block_transactions 的 DELETE 与重算 blocks 的 UPDATE；
---     · 文件末尾一次性重算 blocks.tx_count 的 UPDATE。
---   若实库确实无这两张表，上述语句执行时会报 ERROR 1146 (Table doesn't exist)。
---   重建库前需先更新本文件（删除链表相关语句，或恢复链表建表），再部署触发器。
+-- 【链上数据边界】
+--   区块与交易由链网关（stub / WeBASE）实时提供，业务库不保存链表；
+--   早期本地模拟链表 blocks / block_transactions 已下线，本文件不再同步这两张表。
 --
 -- 【为什么只做单向】
 --   MySQL 禁止「触发器里再回写触发它的那条语句正在改的表」，双向联动会报
@@ -80,12 +72,11 @@ BEGIN
   ON DUPLICATE KEY UPDATE id = id;
 END$$
 
--- ② 修改排放记录 → 同步到报告 / 认证 / 链上交易
+-- ② 修改排放记录 → 同步到报告 / 认证
 --    同步范围：企业编号、企业名称、报告期、排放量、电子防伪码；
 --              不含 status（由审核接口单独回写），也不含来源/活动数据等仅主表使用的字段。
 --    每条 UPDATE 都带「任一字段值不同才执行」的条件，正常更新时子表命中 0 行即结束，
 --    避免触发器之间相互触发形成递归。
---    注意：若实库已无 block_transactions，第 3 段 UPDATE 会在更新排放记录时报 1146。
 CREATE TRIGGER trg_emission_au AFTER UPDATE ON emission_records
 FOR EACH ROW
 BEGIN
@@ -114,46 +105,18 @@ BEGIN
       OR NOT (period <=> NEW.period)
       OR NOT (amount <=> NEW.amount)
       OR NOT (fingerprint <=> NEW.fingerprint));
-
-  UPDATE block_transactions SET
-    enterprise_name = NEW.enterprise_name,
-    period = NEW.period,
-    amount = NEW.amount,
-    fingerprint = NEW.fingerprint
-  WHERE emission_id = NEW.id
-    AND (NOT (enterprise_name <=> NEW.enterprise_name)
-      OR NOT (period <=> NEW.period)
-      OR NOT (amount <=> NEW.amount)
-      OR NOT (fingerprint <=> NEW.fingerprint));
 END$$
 
--- ③ 删除排放记录 → 先删除报告 / 认证 / 链上交易中同号的记录
+-- ③ 删除排放记录 → 先删除报告 / 认证中同号的记录
 --    必须用 BEFORE DELETE：报告与认证表对 emission_records 有外键约束，
 --    外键检查发生在语句执行时，AFTER DELETE 触发器来不及清理子表（会报 ERROR 1451）
---    删除顺序：报告 → 认证 → 链上交易，先清子表再让主表删除继续执行。
---    注意：若实库已无 block_transactions / blocks，本触发器中的 DELETE 与 UPDATE 会报 1146。
+--    删除顺序：报告 → 认证，先清子表再让主表删除继续执行。
 CREATE TRIGGER trg_emission_bd BEFORE DELETE ON emission_records
 FOR EACH ROW
 BEGIN
   DELETE FROM report_records WHERE id = OLD.id;
   DELETE FROM certification_records WHERE emission_id = OLD.id;
-  DELETE FROM block_transactions WHERE emission_id = OLD.id;
-
-  -- 按实际交易数重算各区块的交易计数：
-  -- 用「重算」而不是「减 1」，这样即使链上交易是直接用 SQL 插入的（没走应用层计数 +1），
-  -- 删除后也能自动纠正，不会出现盲减导致的偏差
-  UPDATE blocks b
-  SET tx_count = (SELECT COUNT(*) FROM block_transactions t WHERE t.block_index = b.block_index);
 END$$
 
 -- 恢复默认分号结束符，后续普通 SQL 才能正常按 ; 切分
 DELIMITER ;
-
--- ============================================================
--- 一次性数据修复：按实际交易数重算各区块的交易计数
--- （幂等，可重复执行；用于修正历史删除造成的 tx_count 虚高）
--- 依赖 blocks / block_transactions；实际库（11 张表）已无这两张表时，
--- 执行本段会报 ERROR 1146，重建库前需一并更新或删除。
--- ============================================================
-UPDATE blocks b
-SET tx_count = (SELECT COUNT(*) FROM block_transactions t WHERE t.block_index = b.block_index);

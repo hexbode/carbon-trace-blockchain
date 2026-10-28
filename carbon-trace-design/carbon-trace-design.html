@@ -473,7 +473,7 @@ flowchart TB
     WF["WeBASE-Front :5002"]
     WS["WeBASE-Sign :5004"]
     FN["node0 / node1 · group0"]
-    SC["CarbonCertRegistry / CarbonCompliance"]
+    SC["CertRegistryData / CertRegistryLogicV2 / CarbonCompliance"]
   end
   B --> N
   B --> P
@@ -499,7 +499,7 @@ flowchart TB
             <tr><td>接口层</td><td>参数校验、角色校验、企业数据隔离</td><td>16 个 Controller + JWT 拦截器 + <code>UserScopes</code></td></tr>
             <tr><td>业务层</td><td>填报核算、审核、认证、撤销、统计、告警</td><td>14 个 Service 实现，事务边界在 Service</td></tr>
             <tr><td>链网关层</td><td>合约读写、ABI 编解码、回执解析、交易定位</td><td><code>ChainGateway</code> 接口 + <code>WebaseChainGateway</code> + <code>StubChainGateway</code></td></tr>
-            <tr><td>链上层</td><td>存证状态机、合规规则判定、计数</td><td>两个 Solidity 合约，链上状态为最终依据</td></tr>
+            <tr><td>链上层</td><td>存证状态机、合规规则判定、计数</td><td>数据/逻辑分离的存证合约 + 合规合约，链上状态为最终依据</td></tr>
           </tbody>
         </table>
       </div>
@@ -514,16 +514,20 @@ flowchart TB
     <section class="chapter" id="c4">
       <div class="chapter-head"><span class="num">04</span><h2>区块链设计</h2><span class="en">On-chain Design</span></div>
 
-      <h3>双合约分工</h3>
+      <h3>存证与合规合约分工</h3>
       <div class="grid-2">
         <div class="card">
-          <h4>CarbonCertRegistry · 认证存证</h4>
-          <p>14 个外部函数：3 个治理（<code>addWriter</code> / <code>removeWriter</code> / <code>transferOwner</code>）、3 个写（<code>certify</code> / <code>revoke</code> / <code>invalidateByEmissionId</code>）、8 个读（按编号 / 排放编号 / 防伪码 / 交易哈希查询，状态、计数、区块内编号列表）。</p>
+          <h4>CertRegistryData + CertRegistryLogicV2 · 认证存证</h4>
+          <p>数据合约只保存防伪码索引、证书状态、写入者集合与计数，所有写入受 <code>onlyLogic</code> 限制；逻辑合约承载 14 个外部业务函数（3 个治理、3 个写、8 个读），V2 额外提供 <code>highestCertSeq()</code> 最高序号视图，供后端编号分配时跳过逐号链查询。升级时部署新逻辑并调用 <code>updateLogic</code>，数据地址与历史存证保持不变，旧逻辑立即失权。</p>
         </div>
         <div class="card">
           <h4>CarbonCompliance · 合规判定</h4>
           <p>18 个外部函数：阈值与配额治理、期末 / 年度总量与因子镜像维护，以及 <code>checkCompliance</code>、<code>checkFluctuation</code>、<code>checkActivity</code>、<code>checkFactor</code>、<code>checkLateReport</code>、<code>checkAll</code> 六类判定入口。</p>
         </div>
+      </div>
+      <div class="note">
+        <span class="label">升级约束</span>
+        逻辑合约不持有业务状态，数据合约的存储布局才是持久化契约；升级只允许更换逻辑，不允许改动数据合约字段。<code>deploy-contracts.sh --upgrade-logic</code> 完成「编译新逻辑 → 部署 → updateLogic」一笔治理交易，升级后可用 <code>logicVersion()</code> 确认链上实际生效版本。
       </div>
 
       <h3>证书状态机</h3>

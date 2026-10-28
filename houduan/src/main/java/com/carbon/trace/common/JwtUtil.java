@@ -68,6 +68,10 @@ public class JwtUtil {
         if (user.getName() != null) {
             builder.claim("name", user.getName());
         }
+        // 强制改密标志：仅在为 true 时写入，旧令牌/正常账号不携带该声明，拦截器按 false 处理
+        if (Boolean.TRUE.equals(user.getMustChangePassword())) {
+            builder.claim("mustChangePassword", true);
+        }
         return builder.signWith(key()).compact();
     }
 

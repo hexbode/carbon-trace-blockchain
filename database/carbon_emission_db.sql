@@ -27,17 +27,10 @@
 --   但数据层面是破坏性的——重跑会清空这些表的现有数据并重置为脚本内置演示数据。
 --   请勿在有真实业务数据的库上直接重跑。
 --
--- 【重要：链上链表已下线】
---   本文件中的 `blocks`（区块表）与 `block_transactions`（区块交易表）属于早期
---   本地模拟链表，链模式改造后（stub 离线桩 / WeBASE 真实联盟链）后端已不再读写。
---   当前实际数据库为 11 张表：
---     enterprises、emission_sources、emission_factors、audit_organizations、
---     users、user_settings、regulator_organizations、emission_records、
---     report_records、certification_records、alerts
---   与实库的差异：
---     · 本文件的 blocks / block_transactions 在实库中不存在，应删除；
---     · 实库的 user_settings、regulator_organizations 由 03、04 脚本创建，本文件未包含。
---   重建库前必须先更新本脚本，否则重建结果与实际库结构不一致。
+-- 【链上数据说明】
+--   区块与交易由链网关（stub 离线桩 / WeBASE 真实联盟链）实时提供，业务库不保存链表。
+--   早期本地模拟链表 blocks / block_transactions 已彻底下线，本脚本不再创建。
+--   user_settings、regulator_organizations 分别由 03、04 脚本创建。
 -- ============================================================
 
 -- 会话字符集设为 utf8mb4，确保脚本内 tCO₂ 等特殊字符正确入库
@@ -46,10 +39,6 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- 按依赖关系倒序删除，便于重复执行
--- 【已下线】block_transactions / blocks 为本地模拟链表，实际库（11 张表）中不存在，
---           重建库前应连同文件后半部分的对应 INSERT 一起删除。
-DROP TABLE IF EXISTS `block_transactions`;
-DROP TABLE IF EXISTS `blocks`;
 DROP TABLE IF EXISTS `certification_records`;
 DROP TABLE IF EXISTS `report_records`;
 DROP TABLE IF EXISTS `emission_records`;
@@ -184,6 +173,7 @@ CREATE TABLE `users` (
   -- ③ 联系方式与状态
   `phone`         VARCHAR(30)           DEFAULT NULL   COMMENT '联系电话',
   `status`        VARCHAR(20)  NOT NULL DEFAULT 'active' COMMENT '状态',
+  `must_change_password` TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '首次登录强制改密：1 需改密 / 0 正常',
   `created_at`    DATE                  DEFAULT NULL   COMMENT '创建时间',
   -- 主键：自增代理键，同时是 user_settings.user_id 的外键目标
   PRIMARY KEY (`id`),
@@ -333,66 +323,7 @@ CREATE TABLE `certification_records` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='认证记录表';
 
 -- ------------------------------------------------------------
--- 9. 区块链-区块表 blocks【已下线的本地模拟链表】
---    ⚠ 该表属于早期「自建 PoW 模拟链」实现，链模式改造（stub / WeBASE）后
---      后端不再读写；当前实际库（11 张表）中不存在本表。
---    保留原因：仅作为历史演示数据与旧版前端结构的存档说明。
---    重建库前应删除本表及文件末尾对应的 INSERT。
---    字段分组：① 链结构（block_index/hash/previous_hash/timestamp）
---              ② PoW 与打包信息（merkle_root/nonce/miner）
---              ③ 统计（tx_count）
--- ------------------------------------------------------------
-CREATE TABLE `blocks` (
-  -- ① 链结构
-  `block_index`   INT          NOT NULL COMMENT '区块高度（0 为创世区块）',
-  `hash`          VARCHAR(70)  NOT NULL COMMENT '区块哈希',
-  `previous_hash` VARCHAR(70)  NOT NULL COMMENT '前一区块哈希',
-  `timestamp`     BIGINT       NOT NULL COMMENT '区块时间戳（毫秒）',
-  -- ② PoW 与打包信息
-  `merkle_root`   VARCHAR(70)           DEFAULT NULL COMMENT '默克尔根',
-  `nonce`         INT          NOT NULL DEFAULT 0 COMMENT 'PoW 随机数',
-  `miner`         VARCHAR(50)           DEFAULT NULL COMMENT '打包节点',
-  -- ③ 统计
-  `tx_count`      INT          NOT NULL DEFAULT 0 COMMENT '区块内交易数',
-  -- 主键：区块高度（链式递增，创世区块为 0）
-  PRIMARY KEY (`block_index`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区块链-区块表';
-
--- ------------------------------------------------------------
--- 10. 区块链-区块交易表 block_transactions【已下线的本地模拟链表】
---    ⚠ 同 blocks：后端已不再读写，当前实际库中不存在本表。
---    原业务：每 4 笔认证交易打包进一个区块，与 certification_records 通过
---            emission_id / tx_hash 对应。
---    索引：uk_tx_hash 防交易重复；idx_bt_block 按区块聚合交易。
---    外键：block_index → blocks.block_index（两表需一起删除，否则外键失配）。
---    字段分组：① 交易标识与所属区块 ② 业务快照（排放记录/企业/报告期/排放量/防伪码）
---              ③ 审核人
--- ------------------------------------------------------------
-CREATE TABLE `block_transactions` (
-  -- ① 交易标识与所属区块
-  `id`              BIGINT        NOT NULL AUTO_INCREMENT COMMENT '主键',
-  `block_index`     INT           NOT NULL              COMMENT '所属区块高度',
-  `tx_hash`         VARCHAR(70)   NOT NULL              COMMENT '交易哈希',
-  -- ② 业务快照
-  `emission_id`     VARCHAR(20)            DEFAULT NULL COMMENT '关联排放记录编号',
-  `enterprise_name` VARCHAR(100)           DEFAULT NULL COMMENT '企业名称',
-  `period`          VARCHAR(10)            DEFAULT NULL COMMENT '报告期',
-  `amount`          DECIMAL(14,2)          DEFAULT NULL COMMENT '排放量',
-  `fingerprint`     VARCHAR(70)            DEFAULT NULL COMMENT '电子防伪码',
-  -- ③ 审核人
-  `auditor`         VARCHAR(50)            DEFAULT NULL COMMENT '审核人',
-  -- 主键：自增代理键
-  PRIMARY KEY (`id`),
-  -- 交易哈希唯一，防止同一笔交易重复入块
-  UNIQUE KEY `uk_tx_hash` (`tx_hash`),
-  -- 区块维度索引：按区块高度查询交易列表
-  KEY `idx_bt_block` (`block_index`),
-  -- 区块外键：交易必须归属一个已存在的区块
-  CONSTRAINT `fk_bt_block` FOREIGN KEY (`block_index`) REFERENCES `blocks` (`block_index`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='区块链-区块交易表';
-
--- ------------------------------------------------------------
--- 11. 异常告警表 alerts —— 监管端风险提示
+-- 9. 异常告警表 alerts —— 监管端风险提示
 --    业务：按类型（数据异常/因子不符/迟报）与级别（高/中/低）记录待处理事项，
 --          status 由 pending 流转到 resolved。
 --    索引：idx_alert_enterprise 企业维度；idx_alert_status 待处理队列；idx_alert_level 按级别筛选。
@@ -430,11 +361,9 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================
 -- 二、初始数据（演示数据）
---    顺序按外键依赖排列：字典/主体 → 用户 → 排放 → 报告 → 认证 → 链表 → 告警，
+--    顺序按外键依赖排列：字典/主体 → 用户 → 排放 → 报告 → 认证 → 告警，
 --    因此可在外键检查开启状态下直接执行。
 --    这些数据用于前端演示与接口冒烟测试，日期/数值均为固定样例值。
---    注意：下方「区块链-区块」「区块链-区块交易」两段 INSERT 对应已下线链表，
---          重建库前应与建表语句一并删除。
 -- ============================================================
 
 
@@ -471,15 +400,16 @@ INSERT INTO `audit_organizations` (`id`, `name`, `short_name`, `code`, `contact`
   ('AUD003', '方圆标志认证集团', NULL, NULL, '孙认证', '132-0000-8008', 'C9-2024-003', '钢铁、建材', 'active', '2023-03-20');
 
 -- 系统用户（账号取自 users，密码取自 demoAccounts，演示环境统一为 123456）
-INSERT INTO `users` (`username`, `password`, `name`, `role`, `enterprise_id`, `org_id`, `phone`, `status`, `created_at`) VALUES
-  ('enterprise01', '123456', '张建国', 'enterprise', 'ENT20240001', NULL, '138-0000-1001', 'active', '2023-03-15'),
-  ('enterprise02', '123456', '李明华', 'enterprise', 'ENT20240002', NULL, '139-0000-2002', 'active', '2023-05-22'),
-  ('enterprise03', '123456', '王秀英', 'enterprise', 'ENT20240003', NULL, '137-0000-3003', 'active', '2023-07-10'),
-  ('enterprise04', '123456', '赵志强', 'enterprise', 'ENT20240004', NULL, '136-0000-4004', 'active', '2023-09-01'),
-  ('auditor01', '123456', '陈审核', 'auditor', NULL, 'AUD001', '135-0000-5005', 'active', '2023-03-01'),
-  ('auditor02', '123456', '刘监管', 'auditor', NULL, 'AUD002', '134-0000-6006', 'active', '2023-03-01'),
-  ('regulator01', '123456', '周主任', 'regulator', NULL, NULL, '131-0000-9009', 'active', '2023-01-01'),
-  ('admin', '123456', '系统管理员', 'admin', NULL, NULL, '133-0000-7007', 'active', '2023-01-01');
+-- must_change_password = 1：演示账号使用统一弱密码，首次登录必须改密后才能访问业务接口
+INSERT INTO `users` (`username`, `password`, `name`, `role`, `enterprise_id`, `org_id`, `phone`, `status`, `must_change_password`, `created_at`) VALUES
+  ('enterprise01', '123456', '张建国', 'enterprise', 'ENT20240001', NULL, '138-0000-1001', 'active', 1, '2023-03-15'),
+  ('enterprise02', '123456', '李明华', 'enterprise', 'ENT20240002', NULL, '139-0000-2002', 'active', 1, '2023-05-22'),
+  ('enterprise03', '123456', '王秀英', 'enterprise', 'ENT20240003', NULL, '137-0000-3003', 'active', 1, '2023-07-10'),
+  ('enterprise04', '123456', '赵志强', 'enterprise', 'ENT20240004', NULL, '136-0000-4004', 'active', 1, '2023-09-01'),
+  ('auditor01', '123456', '陈审核', 'auditor', NULL, 'AUD001', '135-0000-5005', 'active', 1, '2023-03-01'),
+  ('auditor02', '123456', '刘监管', 'auditor', NULL, 'AUD002', '134-0000-6006', 'active', 1, '2023-03-01'),
+  ('regulator01', '123456', '周主任', 'regulator', NULL, NULL, '131-0000-9009', 'active', 1, '2023-01-01'),
+  ('admin', '123456', '系统管理员', 'admin', NULL, NULL, '133-0000-7007', 'active', 1, '2023-01-01');
 
 -- 碳排放数据记录（由前端生成逻辑产出：4 家企业 × 2024 年 12 个月）
 INSERT INTO `emission_records` (`id`, `enterprise_id`, `enterprise_name`, `period`, `source_code`, `source_name`, `activity_data`, `activity_unit`, `emission_factor`, `amount`, `unit`, `status`, `fingerprint`, `created_at`, `reporter`) VALUES
@@ -618,57 +548,6 @@ INSERT INTO `certification_records` (`id`, `emission_id`, `enterprise_id`, `ente
   ('CERT000031', 'EM000043', 'ENT20240004', '东方电力集团', '2024-07', 1116.87, '0xdaed94638de1a98397d7e95716e5791b2387a3c84c83db004da486b8ac77337f', '0xa75a53e6513b687c2f06aff6f80b39ed4647b127eb7ba421d35ad4a4074562c3', 8, '陈审核', '数据真实有效，排放因子使用符合《企业温室气体排放核算方法与报告指南》，予以认证。', '2026-09-22 00:53:30', 'valid', NULL, NULL),
   ('CERT000032', 'EM000045', 'ENT20240004', '东方电力集团', '2024-09', 1399.29, '0xbdb3aa230271b98a9247c336e1f39dbcf1cfbddf45cce76a293b8430f77aa2e2', '0x04b405c7ff452d0dad1965ae63a776150272a8f7ff14a20e9acb05ae34f15312', 8, '刘监管', '数据真实有效，排放因子使用符合《企业温室气体排放核算方法与报告指南》，予以认证。', '2026-09-21 19:53:30', 'valid', NULL, NULL),
   ('CERT000033', 'EM000047', 'ENT20240004', '东方电力集团', '2024-11', 558.42, '0x573c30f6442d50144cc02043416f899daf5acd99b44f6b5b09abc83b644acb0c', '0xc29d3908e94744a9bf9cdccafccf3746441cafda038c67a2391a78be1d66fa92', 9, '周主任', '数据真实有效，排放因子使用符合《企业温室气体排放核算方法与报告指南》，予以认证。', '2026-09-21 14:53:30', 'valid', NULL, NULL);
-
--- 区块链-区块（含创世区块，PoW 难度 2）
--- 【已下线】仅作历史演示存档；实库无 blocks 表，重建库时应删除本段 INSERT。
-INSERT INTO `blocks` (`block_index`, `hash`, `previous_hash`, `timestamp`, `merkle_root`, `nonce`, `miner`, `tx_count`) VALUES
-  (0, '0x35139c1cd65d7be9b5aae15d6e6aca224c3b2af3acfa4be7b089a0bdf4be3cfc', '0x0000000000000000000000000000000000000000000000000000000000000000', 1790568410943, '0x12af4cc063812fe6ef52de1b954c8894474d701224ffb1bf9436c3fdbcd2edc1', 0, '监管节点-01', 0),
-  (1, '0x0039dab980ca9c6ddf3fce3656cfb9e81e85070c8a1c857c6383bb068ee87d80', '0x35139c1cd65d7be9b5aae15d6e6aca224c3b2af3acfa4be7b089a0bdf4be3cfc', 1790576430943, '0x12af4cc063812fe6ef52de1b954c8894474d701224ffb1bf9436c3fdbcd2edc1', 183, '监管节点-02', 4),
-  (2, '0x00c67bc8b416ba081f8505d55f14a453a34c4b68d67d0e917923e60e9021a084', '0x0039dab980ca9c6ddf3fce3656cfb9e81e85070c8a1c857c6383bb068ee87d80', 1790576670945, '0x784749a29784c32336aaf4042a64648538f3ded437e067d36cfcbac8d8454078', 64, '监管节点-03', 4),
-  (3, '0x0064b59a1f483b98974eb26f9a10cd55283ed8f9b96fdd8d6d9817869d4c4e30', '0x00c67bc8b416ba081f8505d55f14a453a34c4b68d67d0e917923e60e9021a084', 1790576910946, '0x721ff07aab23d7cd634c4cf1c298a8063e38a3652d88ec4c9c0694c5ebe74925', 146, '监管节点-01', 4),
-  (4, '0x00f3b87d4e143ff8f0976f14b87587ace1205209027e589649d5b7e7de391b43', '0x0064b59a1f483b98974eb26f9a10cd55283ed8f9b96fdd8d6d9817869d4c4e30', 1790577150947, '0x528d892a4ae8a61daaec425eaed7cb8c8ada0ee0370fcd9e09e350469c594619', 218, '监管节点-02', 4),
-  (5, '0x00f6df71aebd23ea28adbe701ce04ceea500f15a8dc49deaeab6d840056dcf4a', '0x00f3b87d4e143ff8f0976f14b87587ace1205209027e589649d5b7e7de391b43', 1790577390949, '0xafcce26cc9c9d2a875ad98f4fb81e12cbbb28596feeb5f5c72e59cafe9a362c1', 266, '监管节点-03', 4),
-  (6, '0x005330a5400077fb91c8dcf7b0dbf04c4760d0676ccba8ea5b446ef4f9eea7c3', '0x00f6df71aebd23ea28adbe701ce04ceea500f15a8dc49deaeab6d840056dcf4a', 1790577630952, '0x24c9a894337af55e4e4d590ca71dc7fc39d7ffdc70113e1ec5a11d5a499b78ae', 17, '监管节点-01', 4),
-  (7, '0x0018bf4627496d9d6a328582e9c4c733ed94bcfa19d837bbbf9c2f11af3f5b16', '0x005330a5400077fb91c8dcf7b0dbf04c4760d0676ccba8ea5b446ef4f9eea7c3', 1790577870952, '0x24c9a894337af55e4e4d590ca71dc7fc39d7ffdc70113e1ec5a11d5a499b78ae', 267, '监管节点-02', 4),
-  (8, '0x0028a7f911b7ca00513442b2cc76bc9ccf45507de50f7289188dd58c8938f72a', '0x0018bf4627496d9d6a328582e9c4c733ed94bcfa19d837bbbf9c2f11af3f5b16', 1790578110954, '0x475a5fe91de3293fd228da469454ab79628e160cb80f6be7c011562515bac09e', 422, '监管节点-03', 4),
-  (9, '0x00951022dc678b961eff693bd5785946c8a31ed8ced4bad6052c525eaf9d5141', '0x0028a7f911b7ca00513442b2cc76bc9ccf45507de50f7289188dd58c8938f72a', 1790578350957, '0x5ca90b7251a9576f970675761935516eae5eee84964e4dcdadfade06a1e01b94', 93, '监管节点-01', 1);
-
--- 区块链-区块交易（每 4 笔认证交易打包为一个区块）
--- 【已下线】仅作历史演示存档；实库无 block_transactions 表，重建库时应删除本段 INSERT。
-INSERT INTO `block_transactions` (`block_index`, `tx_hash`, `emission_id`, `enterprise_name`, `period`, `amount`, `fingerprint`, `auditor`) VALUES
-  (1, '0x40ef1f7cb724092abc8dc7d4b4e7db4b9523e2230047a7993fd2e4f773f09129', 'EM000001', '华东钢铁制造有限公司', '2024-01', 347.43, '0x1bc2c3c442cb267217a59f7291edd8d81fc421ebc5c660e03c1a07c4705da1be', '陈审核'),
-  (1, '0x5639f7116ee47bc4ecf368c6dadcce0f2c5eec50aff98de8a3f2db92f73fb0d1', 'EM000002', '华东钢铁制造有限公司', '2024-02', 243.82, '0x6acfd7633aeec1270472db3d77fa8a054f23cc8a81583adc27b8c6fb6b3ea7ca', '刘监管'),
-  (1, '0x0db64d7903a6682f6ec8dacdcd36140372769ba8fba6b644b353d12eea751ecd', 'EM000003', '华东钢铁制造有限公司', '2024-03', 1145.08, '0xa61907a3627e8dff4f57795540dca668d7cb13ca77af093fd7474f906da1bee8', '周主任'),
-  (1, '0x6d40212a76864c67a24caa57a4ea7f555bc775b764c9da0691081da7212134d5', 'EM000004', '华东钢铁制造有限公司', '2024-04', 491.27, '0x2e7820a5bf493de629e481fa286083e213c158048fe6b526738478058bc2a7e3', '陈审核'),
-  (2, '0x20720050bb7d91658d37d5f576c72c82c75d0ed62f38274f1b65752002e9e7eb', 'EM000005', '华东钢铁制造有限公司', '2024-05', 281.8, '0x158510a6a7a7db9a62e6e8500cf1b2d318bc7f9b2c4047962fcd9f5c6a54df60', '刘监管'),
-  (2, '0xa669f7d87f4e9973b7bb5ef9837650dac316347942e442b41f7eaa8d3fbfb953', 'EM000006', '华东钢铁制造有限公司', '2024-06', 417.5, '0x9bece588ec4cacd510e3d49f6414edfabfa122ed70a9dc6f5619f336ee501596', '周主任'),
-  (2, '0xab92aaffca0ddf963b60d8fd62dc45363894e668f7e94f1a92f333d258e67b69', 'EM000007', '华东钢铁制造有限公司', '2024-07', 1325.21, '0x0a5d3c0fe6505d15163d845a6a09204d32c5595e8aeadbf62b9d2415f8605bcb', '陈审核'),
-  (2, '0x04ab47ad61844c00a6ea5322298175f5897e99efa93e313a81418e62489fd473', 'EM000011', '华东钢铁制造有限公司', '2024-11', 1151.67, '0x8e1a0e4255df10995631f651a38d6f3a4feb06c033d4458c7603d644df08c4a7', '刘监管'),
-  (3, '0xe4af47f908c587f7b8871db2a883338164613890d32902bcce54155ab72d1ee5', 'EM000012', '华东钢铁制造有限公司', '2024-12', 993.77, '0x162bf45e9882cdcfced59018f212cf1029e8fa572aaebd58cfa3769a14c615ff', '周主任'),
-  (3, '0xc0803d3e6745314aec0084cecb4e8b3d225434825f32ccc112e247b5daf18441', 'EM000013', '绿能化工集团', '2024-01', 1448.8, '0xdf5ff9de765eb96a4bc70a3c15545f69487f3c234db86a5b28c8225d68c70f98', '陈审核'),
-  (3, '0xde5fe41fe6cc21832c99156e1f651ba6c8163c94bc276a1636ffb794f3ebfe4a', 'EM000014', '绿能化工集团', '2024-02', 1122.31, '0x724ea43f023bd290f7c25590d900e2a5f3168edc6eed858956ede5b5d7653eb9', '刘监管'),
-  (3, '0xbf0f0036625eb3a3602aab27fd95675eadb3709723bc6db5fbecdd60ce3c902b', 'EM000015', '绿能化工集团', '2024-03', 448.01, '0x026d9dd09507a423fe207217641f3c83f035562d743b6d2d17676ba8c75da326', '周主任'),
-  (4, '0x897aab7fa71c230243f326452a5d1d2521d4b438d1d996582262e9a8db2d497c', 'EM000016', '绿能化工集团', '2024-04', 1324.68, '0x2d0039b826d2448ee3207f38b6e5dec1a14dfa844fb85b8808240032765365fc', '陈审核'),
-  (4, '0x651a36618af3cf5a52cf0df6f89ff8c3ca661c807955858ccb986f61d1d1530d', 'EM000017', '绿能化工集团', '2024-05', 474.21, '0xc5ced513e1f3f9ab124121f0724ea9e0dd7e46146ccefc96e7236022e09ef355', '刘监管'),
-  (4, '0x50f22d16437bc1bf4e2c76374d9f79f02c7d39ea96838f04e110ccafcae80441', 'EM000018', '绿能化工集团', '2024-06', 498.42, '0xae429844f6b9e34315bf0beb2991ba1100ac92fb8058878ed746002c6f1d42d6', '周主任'),
-  (4, '0xace52f743be36ffebcc7119d0772314e940cd1e0a0e4b290b6d80fe1cb11983e', 'EM000019', '绿能化工集团', '2024-07', 1476.11, '0xf7d67a9bf5c64c0c34fc310e34baf258fcf24fbcdf6e19678d86f6a64b2847f4', '陈审核'),
-  (5, '0xb4d9ba39d1ea1b37b39613151dd06a1a74bdb0a9b0acd7bb4a5fa8ea5c6ff9c2', 'EM000021', '绿能化工集团', '2024-09', 461.95, '0x194ebba71b6d4c515cfadaa6733fb6faa0aae547850c36e3b1b1d5b1fd3ba4cf', '刘监管'),
-  (5, '0xe3b730b9c78529e4870ff0cd3be3b61f1ad11ba4b675b7f159dc1b4eb5226325', 'EM000022', '绿能化工集团', '2024-10', 1354.29, '0xddb21985620a2fe8403ccf0ea710ef57d0a2ac2488c53bde9ff580181bf49bc9', '周主任'),
-  (5, '0x73ad99ac86622a93a29c3908fd69c88eebbfb6c8cd6b96ad5747026c3a4e281e', 'EM000026', '南方水泥股份有限公司', '2024-02', 508.6, '0x06fc36eef0e17a0588027a0e9308fc37372e766c2b6ca8a972b702fb783f6ca1', '陈审核'),
-  (5, '0xb8e1791ae5ac6de963c0dc93873307841b33a7ee7d84acd88aafc5afd5587c46', 'EM000028', '南方水泥股份有限公司', '2024-04', 1636.01, '0x59b3033435d4f2d457b5c688606cf941eaa503943476482df7571d567e88340c', '刘监管'),
-  (6, '0x363ff75a71144d3d05e9bc3cd49d94f0691c98ecbc2aa1e68e7db023a05b592f', 'EM000029', '南方水泥股份有限公司', '2024-05', 555.06, '0xddb398a87f248153c28b638af2416b878f23a3b9c24cf207e9980f06186a6042', '周主任'),
-  (6, '0xeb6f559b82a15d4894b15577d17b1717499f05d7a3b6f8cae3d0a6cbd6c20b10', 'EM000030', '南方水泥股份有限公司', '2024-06', 314.77, '0xff0a5302ef0e4e772381d5216dd7f8fb7ee20e77c7b846219d85c024b37307c7', '陈审核'),
-  (6, '0x0021b1007637abbcc72b920a64459fdf147f15b9abc1b3c9bf476058a57d9cdb', 'EM000031', '南方水泥股份有限公司', '2024-07', 278.97, '0x3431f449eb6662be6df5b9c1a5f2a7847be2f820111779a8eb0d339529552433', '刘监管'),
-  (6, '0x8fb3d5ea7fce25bb65bb416436aa8fe4a3c31d12b7c84f4489cbbcdadb096fb8', 'EM000032', '南方水泥股份有限公司', '2024-08', 1699.26, '0x28832064f8ab0f1c3ea972a8fe7fcfcc929b14b35fa6f3dae68aa2d978029c90', '周主任'),
-  (7, '0xa1c32abbae526b27b8502f01e07473ec02b93e4b0261d019f895d0b1b846cfb1', 'EM000033', '南方水泥股份有限公司', '2024-09', 331.03, '0x3d6a0f13680dde3b6eb925eda21bdfb9d226deac1af29ba1e0b75e3939353a8d', '陈审核'),
-  (7, '0x1ee6e3c7bf1567bfebc0ccfd7eadabe83d7877ff0c08f7baaeeb46d27e8d7c73', 'EM000034', '南方水泥股份有限公司', '2024-10', 412.13, '0x015eb18252c72262fd6a52720e7fae9e961ebb4ad7804a8b74984d4db5e5775b', '刘监管'),
-  (7, '0xdce83b0d168c22547da2febb4e7d639b59807a6962cb10d3c21fc6e0921c2b7b', 'EM000035', '南方水泥股份有限公司', '2024-11', 1633, '0x6f30270d62b48c5ad887889673da89c79c695f6659f7fc439f59cef282e121d4', '周主任'),
-  (7, '0x9b9d848c593b781611f9e1f08b8ab0d8f1ff20fc20b2ac2824756a52dc83966e', 'EM000036', '南方水泥股份有限公司', '2024-12', 1349.37, '0x2ba2940b65427a8c9f669c59c509d5c52f4ae31f040ec99b54600987d474e98f', '陈审核'),
-  (8, '0x6b393cf52db32523e40d8eb45ea564dbcd1803ce5d3c8a3e7e7a08c7f257e6b4', 'EM000037', '东方电力集团', '2024-01', 1616.87, '0x47c626e0c4c5f0a863e469c97427d531ec321a32229cc8a61b6405a70384d67f', '刘监管'),
-  (8, '0xa646f838356ad39b61c0e7814f054e12c4f98e582ae4c19b1516f8f2c973f4a9', 'EM000040', '东方电力集团', '2024-04', 1032.4, '0x9679ef2043279444f193109e92021bd68bf5c39af92cf4dd3b16b8631260d59c', '周主任'),
-  (8, '0xa75a53e6513b687c2f06aff6f80b39ed4647b127eb7ba421d35ad4a4074562c3', 'EM000043', '东方电力集团', '2024-07', 1116.87, '0xdaed94638de1a98397d7e95716e5791b2387a3c84c83db004da486b8ac77337f', '陈审核'),
-  (8, '0x04b405c7ff452d0dad1965ae63a776150272a8f7ff14a20e9acb05ae34f15312', 'EM000045', '东方电力集团', '2024-09', 1399.29, '0xbdb3aa230271b98a9247c336e1f39dbcf1cfbddf45cce76a293b8430f77aa2e2', '刘监管'),
-  (9, '0xc29d3908e94744a9bf9cdccafccf3746441cafda038c67a2391a78be1d66fa92', 'EM000047', '东方电力集团', '2024-11', 558.42, '0x573c30f6442d50144cc02043416f899daf5acd99b44f6b5b09abc83b644acb0c', '周主任');
 
 -- 异常告警（前端静态定义，原样导出）
 INSERT INTO `alerts` (`id`, `enterprise_id`, `enterprise_name`, `type`, `type_label`, `level`, `message`, `period`, `status`, `created_at`) VALUES

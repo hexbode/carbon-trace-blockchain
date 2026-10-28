@@ -19,6 +19,7 @@ import com.carbon.trace.common.ApiException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -29,6 +30,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -36,6 +38,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
@@ -74,6 +80,9 @@ public class WebaseChainGateway implements ChainGateway {
 
     private static final Logger log = LoggerFactory.getLogger(WebaseChainGateway.class);
 
+    /** 交易哈希形态：0x 可选 + 64 位十六进制，用于 findAny 优先判定输入类型 */
+    private static final Pattern TX_HASH_PATTERN = Pattern.compile("^(0x)?[0-9a-fA-F]{64}$");
+
     /** 认证编号形态：CR + 6 位序号（用于从事件解码结果中识别编号） */
     private static final Pattern CERT_ID_PATTERN = Pattern.compile("^CR\\d{6}$");
 
@@ -91,8 +100,56 @@ public class WebaseChainGateway implements ChainGateway {
     private volatile long availableCheckedAt = 0L;
     private volatile boolean availableCache = false;
 
+    /** 证书计数缓存 TTL（30 秒）：统计/对账周期性读取；certify / revoke / invalidate 成功后会立即失效 */
+    private static final long COUNT_CACHE_TTL_MS = 30_000L;
+    /** 证书计数缓存；写链成功后立即清空 */
+    private volatile ChainCertCount countCache;
+    private volatile long countCachedAt = 0L;
+
+    /** 最新区块高度缓存 TTL（2 秒）：stats / health / 区块列表会在一次请求里重复取链尖 */
+    private static final long LATEST_BLOCK_CACHE_TTL_MS = 2_000L;
+    private volatile long latestBlockCache = -1L;
+    private volatile long latestBlockCachedAt = 0L;
+
+    /** 节点交易总数缓存 TTL（5 秒）：仅健康检查使用，链尖交易数短时滞后无影响 */
+    private static final long TX_COUNT_CACHE_TTL_MS = 5_000L;
+    private volatile long txCountCache = -1L;
+    private volatile long txCountCachedAt = 0L;
+
+    /** 链上最高认证序号缓存 TTL：本进程 certify 会即时抬升，60 秒兜底外部写入 */
+    private static final long HIGHEST_SEQ_CACHE_TTL_MS = 60_000L;
+    /** 链上最高认证序号；-1 表示当前逻辑合约未提供该视图或读取失败 */
+    private volatile Long highestCertSeqCache;
+    private volatile long highestCertSeqCachedAt = 0L;
+    /** 仅记录一次「最高序号视图不可用」日志，避免每次编号检查都刷日志 */
+    private volatile boolean highestCertSeqUnavailableLogged = false;
+
     /** 存证合约 certify 函数选择器缓存（从 ABI 现算，见 certifySelector） */
     private volatile String certifySelectorCache;
+
+    /**
+     * 链调用并发执行器（固定 8 线程）：
+     * 批量读证书、最近区块列表都按编号独立请求，并行可把 N 次串行链调用压到约 1~2 波。
+     * 线程数刻意保持较小（Front 每次调用都会新建 SDK Client，约 0.3 秒 CPU），
+     * 既覆盖 10 个区块的并行拉取，又避免公开接口被刷时把 WeBASE-Front 打满。
+     */
+    private final ExecutorService chainCallExecutor = Executors.newFixedThreadPool(8, runnable -> {
+        Thread thread = new Thread(runnable, "chain-gateway-call");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /**
+     * 区块缓存（LRU，上限 64）：区块一旦上链即不可变，重复按高度回查交易哈希时可直接命中。
+     * 只缓存成功解析的区块；拉取失败的请求不写缓存，后续仍会重试。
+     */
+    private final Map<Long, WebaseBlockDto> blockCache = Collections.synchronizedMap(
+            new LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Long, WebaseBlockDto> eldest) {
+                    return size() > 64;
+                }
+            });
 
     /**
      * 装配网关。
@@ -147,9 +204,20 @@ public class WebaseChainGateway implements ChainGateway {
         try {
             long blockNumber = latestBlockNumber();
             log.info("链连通性检查通过：最新区块高度 = {}", blockNumber);
+            // 预热最高认证序号：首次新增排放记录即可跳过逐号链查询（V1 时返回 -1，走原逻辑）
+            log.info("链上最高认证序号 = {}（-1 表示当前逻辑合约未提供该视图）", highestCertSeq());
         } catch (RuntimeException e) {
             log.warn("链连通性检查失败（不影响启动，链上功能将在 WeBASE-Front 可用后恢复）：{}", e.getMessage());
         }
+    }
+
+    /**
+     * 容器关闭时停止链调用线程池，避免应用停止后仍有残留线程执行链请求。
+     * 已提交但未完成的任务允许继续跑完（shutdown 不中断），不阻塞 Spring 关闭流程。
+     */
+    @PreDestroy
+    public void shutdownExecutor() {
+        chainCallExecutor.shutdown();
     }
 
     // ---------------- 认证存证（写） ----------------
@@ -157,7 +225,7 @@ public class WebaseChainGateway implements ChainGateway {
     /**
      * 认证上链：把认证要素整成定标参数调存证合约 certify，成功后用回执回填 txHash/区块高度并写入缓存。
      *
-     * 参数顺序必须与 CarbonCertRegistry.certify 一致：
+     * 参数顺序必须与 CertRegistryLogicV1.certify 一致：
      * (certId, enterpriseId, enterpriseName, period, amountScaled, fingerprint, auditor, complianceFlags)。
      * 其中 amount 需先定标为整数，complianceFlags 虽是 int 也要按 uint256 传 long，避免被当作有符号数。
      *
@@ -198,6 +266,14 @@ public class WebaseChainGateway implements ChainGateway {
         cert.setBlockIndex(blockNumber < 0 ? null : blockNumber);
         cert.setCreatedBlock(cert.getBlockIndex());
         txLocator.remember(command.getCertId(), receipt.getTransactionHash(), cert.getBlockIndex());
+        invalidateCountCache();
+        // 本进程写入的新认证会即时抬升最高序号缓存，避免下一次编号检查多付一次链调用
+        long seq = certSeqOf(command.getCertId());
+        Long cachedSeq = highestCertSeqCache;
+        if (seq > 0 && cachedSeq != null && cachedSeq >= 0 && seq > cachedSeq) {
+            highestCertSeqCache = seq;
+            highestCertSeqCachedAt = System.currentTimeMillis();
+        }
         return cert;
     }
 
@@ -211,6 +287,7 @@ public class WebaseChainGateway implements ChainGateway {
     @Override
     public void revoke(String certId, String reason) {
         callWrite(contractRegistry(), "revoke", List.of(nullToEmpty(certId), nullToEmpty(reason)));
+        invalidateCountCache();
     }
 
     /**
@@ -226,6 +303,7 @@ public class WebaseChainGateway implements ChainGateway {
     public void invalidateByEmissionId(String emissionId, String reason) {
         // 链上不可删除，这里是作废标记；未认证过的排放记录合约会直接返回 false（不 revert）
         callWrite(contractRegistry(), "invalidateByEmissionId", List.of(nullToEmpty(emissionId), nullToEmpty(reason)));
+        invalidateCountCache();
     }
 
     // ---------------- 认证存证（读 / 核验） ----------------
@@ -274,6 +352,73 @@ public class WebaseChainGateway implements ChainGateway {
     }
 
     /**
+     * 读取认证时写入的合规快照位掩码。
+     *
+     * 独立于证书元组调用 complianceOf：普通证书查询不需要多付一次链调用，
+     * 只有合规快照接口才显式读取。
+     *
+     * @param certId 认证编号；空或未登记返回 0
+     * @return 16 位位掩码
+     */
+    @Override
+    public int complianceFlagsOf(String certId) {
+        if (certId == null || certId.isBlank()) {
+            return 0;
+        }
+        JsonNode values = callRead(contractRegistry(), "complianceOf", List.of(certId));
+        return (int) num(values, 0);
+    }
+
+    /**
+     * 链上最高认证序号（V2 逻辑合约的 highestCertSeq 视图）。
+     *
+     * 命中 60 秒缓存时直接返回；本进程 certify 写入新编号时会即时抬升缓存。
+     * V1 逻辑合约没有该函数，调用失败时返回 -1 并缓存 60 秒，调用方据此回退到逐号检查。
+     *
+     * @return 最高序号；链上尚无认证返回 0；视图不可用返回 -1
+     */
+    @Override
+    public long highestCertSeq() {
+        long now = System.currentTimeMillis();
+        Long cached = highestCertSeqCache;
+        if (cached != null && now - highestCertSeqCachedAt < HIGHEST_SEQ_CACHE_TTL_MS) {
+            return cached;
+        }
+        try {
+            JsonNode values = callRead(contractRegistry(), "highestCertSeq", List.of());
+            long seq = num(values, 0);
+            highestCertSeqCache = seq;
+            highestCertSeqCachedAt = now;
+            return seq;
+        } catch (RuntimeException e) {
+            if (!highestCertSeqUnavailableLogged) {
+                log.info("链上最高认证序号不可用，编号占用检查回退为逐号查询：{}", e.getMessage());
+                highestCertSeqUnavailableLogged = true;
+            }
+            highestCertSeqCache = -1L;
+            highestCertSeqCachedAt = now;
+            return -1L;
+        }
+    }
+
+    /**
+     * 从认证编号 "CR" + 数字中解析序号；格式非法返回 0。
+     *
+     * @param certId 认证编号
+     * @return 序号；非 CR 前缀或含非数字时返回 0
+     */
+    private static long certSeqOf(String certId) {
+        if (certId == null || certId.length() <= 2 || !certId.startsWith("CR")) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(certId.substring(2));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    /**
      * 按交易哈希核验：先命中本进程缓存，否则解析回执入参解出认证编号再查询并回填缓存。
      *
      * 回执查询直接使用调用方传入的原始哈希（带不带 0x 都可），但缓存键统一归一化。
@@ -313,21 +458,32 @@ public class WebaseChainGateway implements ChainGateway {
      *
      * 注意防伪码路径会把整个字符串原样当作防伪码查询（一次链调用），
      * 因此传入交易哈希时会先产生一次「必然未命中」的链查询，再走哈希路径。
+     * 这里按输入形态优先：64 位十六进制先走交易哈希，其余先走防伪码，
+     * 未命中再尝试另一条路径，避免必然失败的那次链调用。
      *
      * @param fingerprintOrTxHash 电子防伪码或交易哈希
      * @return 命中的凭证；两者均未命中时返回空 Optional
      */
     @Override
     public Optional<ChainCertificate> findAny(String fingerprintOrTxHash) {
-        Optional<ChainCertificate> byFingerprint = findByFingerprint(fingerprintOrTxHash);
-        return byFingerprint.isPresent() ? byFingerprint : findByTxHash(fingerprintOrTxHash);
+        if (fingerprintOrTxHash == null || fingerprintOrTxHash.isBlank()) {
+            return Optional.empty();
+        }
+        String value = fingerprintOrTxHash.trim();
+        if (TX_HASH_PATTERN.matcher(value).matches()) {
+            Optional<ChainCertificate> byTxHash = findByTxHash(value);
+            return byTxHash.isPresent() ? byTxHash : findByFingerprint(value);
+        }
+        Optional<ChainCertificate> byFingerprint = findByFingerprint(value);
+        return byFingerprint.isPresent() ? byFingerprint : findByTxHash(value);
     }
 
     /**
      * 按编号集合批量取凭证，并按需按区块反查交易哈希回填展示字段。
      *
-     * 两条优化：
-     *  - 先对「有 createdBlock 但缺 txHash」的证书按区块去重，再逐块拉取一次，
+     * 三条优化：
+     *  - 按编号并行读取：每个编号的合约只读调用相互独立，串行执行会让 3 条示例证书耗时叠加；
+     *  - 先对「有 createdBlock 但缺 txHash」的证书按区块去重，再并行拉取一次，
      *    避免同一区块内有 N 条证书时重复请求 N 次；
      *  - 结果使用 LinkedHashMap，保持入参遍历顺序（便于前端稳定展示）。
      *
@@ -343,19 +499,35 @@ public class WebaseChainGateway implements ChainGateway {
         if (emissionIds == null || emissionIds.isEmpty()) {
             return result;
         }
-        for (String emissionId : emissionIds) {
-            findByEmissionId(emissionId).ifPresent(cert -> result.put(emissionId, cert));
+        // 去重且保持入参顺序：重复编号只查一次，结果仍按首次出现的位置输出
+        List<String> ids = new ArrayList<>(new LinkedHashSet<>(emissionIds));
+
+        // 并行读取：每条 find 都是独立的只读链调用，串行会线性放大耗时
+        List<CompletableFuture<Optional<ChainCertificate>>> reads = new ArrayList<>(ids.size());
+        for (String emissionId : ids) {
+            reads.add(CompletableFuture.supplyAsync(() -> findByEmissionId(emissionId), chainCallExecutor));
         }
-        // 批量按区块去重反查交易哈希，避免逐条查链
+        for (int i = 0; i < ids.size(); i++) {
+            Optional<ChainCertificate> cert = join(reads.get(i));
+            if (cert.isPresent()) {
+                result.put(ids.get(i), cert.get());
+            }
+        }
+
+        // 批量按区块去重反查交易哈希，避免逐条查链；区块不可变，命中缓存时无链请求
         Set<Long> blocks = new LinkedHashSet<>();
         for (ChainCertificate cert : result.values()) {
             if (cert.getCreatedBlock() != null && cert.getTxHash() == null) {
                 blocks.add(cert.getCreatedBlock());
             }
         }
-        Map<String, String> txHashByCertId = new HashMap<>();
+        List<CompletableFuture<WebaseBlockDto>> blockReads = new ArrayList<>(blocks.size());
         for (Long blockNumber : blocks) {
-            WebaseBlockDto block = fetchBlock(blockNumber);
+            blockReads.add(CompletableFuture.supplyAsync(() -> fetchBlock(blockNumber), chainCallExecutor));
+        }
+        Map<String, String> txHashByCertId = new HashMap<>();
+        for (CompletableFuture<WebaseBlockDto> blockRead : blockReads) {
+            WebaseBlockDto block = join(blockRead);
             if (block != null) {
                 txHashByCertId.putAll(certifyTxsInBlock(block));
             }
@@ -379,13 +551,29 @@ public class WebaseChainGateway implements ChainGateway {
      */
     @Override
     public ChainCertCount countCertificates() {
+        long now = System.currentTimeMillis();
+        ChainCertCount cached = countCache;
+        if (cached != null && now - countCachedAt < COUNT_CACHE_TTL_MS) {
+            return cached;
+        }
         JsonNode values = callRead(contractRegistry(), "count", List.of());
         ChainCertCount count = new ChainCertCount();
         count.setTotal(num(values, 0));
         count.setValid(num(values, 1));
         count.setRevoked(num(values, 2));
         count.setInvalid(num(values, 3));
+        // 并发过期时可能重复查询一次，结果一致，属可接受的良性竞争
+        countCache = count;
+        countCachedAt = now;
         return count;
+    }
+
+    /**
+     * 清空证书计数缓存。certify / revoke / invalidate 写链成功后调用，
+     * 保证统计接口立刻反映新状态，而不用等 5 秒 TTL 自然过期。
+     */
+    private void invalidateCountCache() {
+        countCache = null;
     }
 
     // ---------------- 链浏览 / 统计 ----------------
@@ -400,8 +588,18 @@ public class WebaseChainGateway implements ChainGateway {
      */
     @Override
     public long latestBlockNumber() {
+        long now = System.currentTimeMillis();
+        long cached = latestBlockCache;
+        if (cached >= 0 && now - latestBlockCachedAt < LATEST_BLOCK_CACHE_TTL_MS) {
+            return cached;
+        }
         JsonNode response = client.get("/" + groupId() + "/web3/blockNumber");
-        return nodeToLong(response);
+        long value = nodeToLong(response);
+        if (value >= 0) {
+            latestBlockCache = value;
+            latestBlockCachedAt = now;
+        }
+        return value;
     }
 
     /**
@@ -413,13 +611,23 @@ public class WebaseChainGateway implements ChainGateway {
      */
     @Override
     public long chainTxCount() {
+        long now = System.currentTimeMillis();
+        long cached = txCountCache;
+        if (cached >= 0 && now - txCountCachedAt < TX_COUNT_CACHE_TTL_MS) {
+            return cached;
+        }
         JsonNode response = client.get("/" + groupId() + "/web3/transaction-total");
         if (response == null) {
             return 0L;
         }
         // WeBASE 1.5.x 返回 {txSum}，3.x 返回 {transactionCount}
         JsonNode count = response.hasNonNull("txSum") ? response.get("txSum") : response.get("transactionCount");
-        return count == null ? 0L : nodeToLong(count);
+        long value = count == null ? 0L : nodeToLong(count);
+        if (value >= 0) {
+            txCountCache = value;
+            txCountCachedAt = now;
+        }
+        return value;
     }
 
     /**
@@ -427,6 +635,7 @@ public class WebaseChainGateway implements ChainGateway {
      *
      * 区间为 [max(0, latest-size+1), latest]：高度不足 size 时从 0 开始，避免算出负数高度。
      * 每个区块单独请求，单个区块解析失败只跳过该块；limit 越大链请求越多，前端需限制上限。
+     * 区块请求相互独立，按高度并行拉取（区块不可变，命中缓存时不再请求链）。
      *
      * @param limit 期望区块数，非正数时使用 {@code carbon.chain.block-list-limit}
      * @return 区块视图列表（最新在前）；链上无区块时返回空列表
@@ -440,10 +649,15 @@ public class WebaseChainGateway implements ChainGateway {
             return List.of();
         }
         long from = Math.max(0L, latest - size + 1);
-        List<ChainBlockView> blocks = new ArrayList<>();
-        // 从链尖向前取 size 个块：高度不足时 from 会被夹到 0，不会产生负数高度
+        // 先并行发起所有区块请求，再按「最新在前」的顺序组装，保证输出顺序与串行实现一致
+        List<CompletableFuture<WebaseBlockDto>> reads = new ArrayList<>(size);
         for (long number = latest; number >= from; number--) {
-            WebaseBlockDto dto = fetchBlock(number);
+            final long blockNumber = number;
+            reads.add(CompletableFuture.supplyAsync(() -> fetchBlock(blockNumber), chainCallExecutor));
+        }
+        List<ChainBlockView> blocks = new ArrayList<>();
+        for (CompletableFuture<WebaseBlockDto> read : reads) {
+            WebaseBlockDto dto = join(read);
             if (dto == null) {
                 continue;
             }
@@ -494,15 +708,42 @@ public class WebaseChainGateway implements ChainGateway {
      * @return 区块 DTO；响应不是对象或反序列化失败时返回 null（调用方按「跳过该块」处理）
      */
     private WebaseBlockDto fetchBlock(long number) {
+        // 区块上链后不可变，命中缓存直接返回，省掉一次约 0.6 秒的区块请求
+        WebaseBlockDto cached = blockCache.get(number);
+        if (cached != null) {
+            return cached;
+        }
         JsonNode response = client.get("/" + groupId() + "/web3/blockByNumber/" + number);
         if (response == null || !response.isObject()) {
             return null;
         }
         try {
-            return objectMapper.treeToValue(response, WebaseBlockDto.class);
+            WebaseBlockDto block = objectMapper.treeToValue(response, WebaseBlockDto.class);
+            blockCache.put(number, block);
+            return block;
         } catch (Exception e) {
             log.warn("区块 {} 解析失败：{}", number, e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * 等待并发任务结果并展开异常：业务异常（ApiException）原样抛出，
+     * 其他运行时异常按原类型抛出，保持与串行实现一致的错误语义。
+     *
+     * @param future 并发任务
+     * @param <T>    结果类型
+     * @return 任务结果
+     * @throws RuntimeException 任务执行失败时抛出其真实原因
+     */
+    private static <T> T join(CompletableFuture<T> future) {
+        try {
+            return future.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw e;
         }
     }
 
@@ -920,7 +1161,7 @@ public class WebaseChainGateway implements ChainGateway {
     }
 
     /**
-     * 解出 certify 调用的入参。参数顺序见 CarbonCertRegistry.certify：
+     * 解出 certify 调用的入参。参数顺序见 CertRegistryLogicV1.certify：
      * (string certId, string enterpriseId, string enterpriseName, string period,
      *  uint256 amountScaled, string fingerprint, string auditor, uint256 complianceFlags)
      * 非 certify 交易返回 null。
@@ -1060,7 +1301,7 @@ public class WebaseChainGateway implements ChainGateway {
     }
 
     /**
-     * 链上 12 元组 → 证书对象（顺序即对外契约，见 CarbonCertRegistry.getByCertId 注释）。
+     * 链上 12 元组 → 证书对象（顺序即对外契约，见 CertRegistryLogicV1.getByCertId 注释）。
      *
      * 字段顺序：exists, status, createdBlock, createdAt, certId, enterpriseId, enterpriseName,
      * period, amountScaled, fingerprint, auditor, reason。

@@ -55,6 +55,10 @@ request.interceptors.response.use(
       localStorage.removeItem('carbon_user')
       ElMessage.error('登录已过期，请重新登录')
       router.push('/login')
+    } else if (error.response?.status === 403 && error.response?.data?.code === 'PASSWORD_CHANGE_REQUIRED') {
+      // 强制改密会话访问业务接口：后端返回专用错误码，前端统一跳转改密页
+      ElMessage.warning(error.response?.data?.message || '首次登录需先修改密码')
+      router.push('/change-password')
     } else {
       // 其它 HTTP 错误：展示后端返回的错误信息或默认提示
       // 后端统一错误体为 { message }，无该字段时退回通用文案。

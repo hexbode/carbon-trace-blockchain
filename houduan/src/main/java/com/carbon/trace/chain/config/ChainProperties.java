@@ -97,7 +97,15 @@ public class ChainProperties {
     @Data
     public static class Contracts {
 
-        private Contract registry = new Contract("CarbonCertRegistry", "", "classpath:chain/CarbonCertRegistry.abi.json");
+        /**
+         * 认证存证逻辑合约。
+         *
+         * 逻辑与数据分离后，registry 指向逻辑合约（CertRegistryLogicV*），
+         * 后端所有 certify / revoke / 查询都打在逻辑合约上；数据合约只由治理脚本调用 updateLogic。
+         * ABI 文件随逻辑版本更新，但函数签名保持兼容。
+         */
+        private Contract registry = new Contract("CertRegistryLogicV2", "",
+                "classpath:chain/CertRegistryLogic.abi.json");
 
         private Contract compliance = new Contract("CarbonCompliance", "", "classpath:chain/CarbonCompliance.abi.json");
     }

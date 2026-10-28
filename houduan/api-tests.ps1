@@ -3,20 +3,22 @@
 # 输出: 逐项 PASS/FAIL + 汇总; 存在失败时退出码为 1
 #
 # 【用途】
-#   对运行中的后端做端到端冒烟/回归测试，共 9 组用例：
-#     一、认证模块            四角色登录、错误密码、/me 鉴权
-#     二、公共端（免登录）    企业/排放概览/示例证书/二维码解析/旧路径鉴权
-#     三、认证记录接口        列表、按防伪码查询及大小写敏感性
-#     四、角色访问限制        监管机构接口的角色准入（403/200）
-#     五、监管机构 CRUD       必填校验、新增、修改、删除、重复删除 404
-#     六、企业管理            列表、行业字典、单个查询、404
-#     七、统计接口            监管/企业/审核三端概览与趋势
-#     八、其他业务模块        排放记录、排放源、因子、报告、区块链、告警、审核机构
-#     九、链模式与合规判定    chain health/stats、合规检查、阈值、配额、公开合规快照
+#   对运行中的后端做端到端冒烟/回归测试，共 11 组用例：
+#     零、数据库结构            建库 22 张表、无 blocks / block_transactions 残留
+#     一、认证模块              四角色登录、强制改密门禁与密码策略、错误密码、/me 鉴权
+#     二、公共端（免登录）      企业/排放概览/示例证书/二维码解析/旧路径鉴权
+#     三、认证记录接口          列表、按防伪码查询及大小写敏感性
+#     四、角色访问限制          监管机构接口的角色准入（403/200）
+#     五、监管机构 CRUD         必填校验、新增、修改、删除、重复删除 404
+#     六、企业管理              列表、行业字典、单个查询、404
+#     七、统计接口              监管/企业/审核三端概览与趋势
+#     八、其他业务模块          排放记录、排放源、因子、报告、区块链、告警、审核机构
+#     九、链模式与合规判定      chain health/stats、合规检查、阈值、配额、公开合规快照
+#     十、CBAM 合规与对账       产品/装置/核查/申报包/Outbox/版本对账
 #
 # 【前置依赖】
-#   1. 后端必须已在本机 8080 启动（$base 硬编码为 http://localhost:8080），
-#      数据库已按 database/ 下脚本初始化并包含演示数据；
+#   1. 后端必须已启动（默认 http://localhost:8080，可用 CARBON_API_BASE 覆盖为
+#      WSL 直连地址等其他入口），数据库已按 database/ 下脚本初始化并包含演示数据；
 #   2. 默认 stub 链模式下，后端启动阶段由 StubChainSeeder 把业务库已有认证记录
 #      （含示例证书 CR000001~CR000003）播种到离线桩，因此「二、公共端」的
 #      sample-certs / qr-resolve、以及「三、认证记录接口」依赖播种完成；
@@ -33,8 +35,8 @@
 # 未捕获的异常（如脚本自身语法错误）立即中止，避免带着错误状态继续跑用例
 $ErrorActionPreference = 'Stop'
 
-# 后端入口地址：脚本假定后端与测试同机运行，换端口需同步修改这里
-$base = 'http://localhost:8080'
+# 后端入口地址：默认本机 8080；跨主机/WSL 直连时可设置 CARBON_API_BASE 覆盖
+$base = if ($env:CARBON_API_BASE) { $env:CARBON_API_BASE.TrimEnd('/') } else { 'http://localhost:8080' }
 # 断言计数：pass/fail 分开累计，failures 保存失败用例名用于汇总输出
 $script:passCount = 0
 $script:failCount = 0
@@ -68,6 +70,9 @@ function Invoke-Api {
             $stream = $resp.GetResponseStream()
             $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
             $content = $reader.ReadToEnd()
+            # 拦截器直接写出的响应可能没有 Content-Length，响应流读不到内容；
+            # Invoke-WebRequest 会把这类响应体放进 ErrorDetails.Message，作为兜底。
+            if (-not $content -and $_.ErrorDetails) { $content = $_.ErrorDetails.Message }
             return @{ Status = $status; Body = $content }
         }
         return @{ Status = -1; Body = $_.Exception.Message }
@@ -104,15 +109,81 @@ function Test-True {
 }
 
 # ------------------------------------------------------------
-# 一、认证模块：四角色登录 → 错误密码 → 携带 token 访问 /me → 无 token 401
-#    登录成功后按角色缓存 token（ent/reg/aud/adm），后续分组复用；
-#    某个角色登录失败会导致依赖该 token 的后续用例连锁失败。
+# 零、数据库结构前置检查
+#    验收口径：按 database/ 脚本重建后 SHOW TABLES 返回 22 张，
+#    且不包含已下线的 blocks / block_transactions。
+#    连接顺序（逐个尝试，任一成功即用）：
+#      1. CARBON_DB_* 环境变量（可指向临时重建库做验收）；
+#      2. Windows mysql 客户端连接 127.0.0.1:3307（WSL MySQL 的端口映射）；
+#      3. WSL 默认发行版内以 root 执行 mysql。
+#    全部连接方式都失败时打印 WARN 并跳过，不影响后续接口用例。
 # ------------------------------------------------------------
-Write-Host "===== 一、认证模块 =====" -ForegroundColor Cyan
+Write-Host "===== 零、数据库结构检查 =====" -ForegroundColor Cyan
 
-# 1. 四角色登录
-#    账号/密码须与当前数据库 users 表一致：四个演示账号统一为默认 123456；
-#    key 用于把 token 存入 $tokens。
+# 目标库名：默认与后端一致；重建验收时可指向临时库
+$dbName = if ($env:CARBON_DB_NAME) { $env:CARBON_DB_NAME } else { 'carbon_emission' }
+
+# 依次尝试多种连接方式读取 SHOW TABLES，成功返回表名数组，全部失败返回 $null
+function Get-DbTables {
+    param([string]$Name)
+    $attempts = New-Object System.Collections.Generic.List[scriptblock]
+    # 方式 1：显式环境变量（跨机器/临时库验收的唯一可移植入口）
+    if ($env:CARBON_DB_HOST) {
+        $attempts.Add({
+            param($db)
+            & mysql "--host=$($env:CARBON_DB_HOST)" "--port=$($env:CARBON_DB_PORT)" "--user=$($env:CARBON_DB_USER)" "--password=$($env:CARBON_DB_PASSWORD)" -N -B -D $db -e 'SHOW TABLES' 2>$null
+        })
+    }
+    # 方式 2：本机 Windows mysql 客户端 + WSL 端口映射
+    if (Get-Command mysql -ErrorAction SilentlyContinue) {
+        $attempts.Add({
+            param($db)
+            & mysql --host=127.0.0.1 --port=3307 --user=root --password=123456 -N -B -D $db -e 'SHOW TABLES' 2>$null
+        })
+    }
+    # 方式 3：WSL 内 root 通过本地 socket 连接（Ubuntu 演示环境）
+    if (Get-Command wsl -ErrorAction SilentlyContinue) {
+        $attempts.Add({
+            param($db)
+            & wsl -u root -- mysql -N -B -D $db -e 'SHOW TABLES' 2>$null
+        })
+    }
+    foreach ($attempt in $attempts) {
+        try {
+            $rows = @(& $attempt $Name | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            if ($LASTEXITCODE -eq 0 -and $rows.Count -gt 0) { return $rows }
+        } catch {
+            # 该连接方式不可用，继续尝试下一种
+        }
+    }
+    return $null
+}
+
+$dbTables = Get-DbTables -Name $dbName
+if ($null -eq $dbTables) {
+    Write-Host "WARN 无法连接数据库 $dbName，跳过建库结构断言（可设置 CARBON_DB_* 环境变量重试）" -ForegroundColor Yellow
+} else {
+    Test-True "建库表数量为 22 ($dbName)" ($dbTables.Count -eq 22) ("实际 {0} 张: {1}" -f $dbTables.Count, ($dbTables -join ', '))
+    $legacyTables = @($dbTables | Where-Object { $_ -eq 'blocks' -or $_ -eq 'block_transactions' })
+    Test-True "无 blocks / block_transactions 残留" ($legacyTables.Count -eq 0) ("实际残留: " + ($legacyTables -join ', '))
+}
+
+# ------------------------------------------------------------
+# 一、认证模块：四角色登录 → 强制改密 → 错误密码 → /me → 无 token 401
+#    演示账号初始密码 123456 且 must_change_password=1，首次登录令牌只能改密/退出；
+#    脚本自动完成改密并使用新密码重新登录，取得后续分组复用的 token（ent/reg/aud/adm）。
+#    结束前会把本次改过密码的演示账号重置回初始状态（见文末还原段）。
+# ------------------------------------------------------------
+Write-Host "`n===== 一、认证模块 =====" -ForegroundColor Cyan
+
+# 回归专用强密码：满足 ≥8 位且同时包含大小写字母与数字
+$strongPassword = 'Carbon@2026'
+# 本次运行实际改过密码的账号，供文末统一还原
+$script:changedAccounts = New-Object System.Collections.Generic.List[string]
+
+# 1. 四角色登录 + 强制改密
+#    账号/密码须与当前数据库 users 表一致：四个演示账号初始为 123456。
+#    若上次运行异常中断导致密码已是测试密码，则回退用测试密码登录，避免连锁失败。
 $roles = @(
     @{ username = 'enterprise01'; password = '123456'; role = 'enterprise'; key = 'ent' },
     @{ username = 'regulator01';  password = '123456'; role = 'regulator';  key = 'reg' },
@@ -121,10 +192,57 @@ $roles = @(
 )
 $tokens = @{}
 foreach ($r in $roles) {
+    # 首选初始密码；失败时回退到回归专用密码（仅用于上次运行残留的场景）
     $resp = Invoke-Api -Method Post -Uri "$base/api/auth/login" -Body $r
+    $usedDefaultPassword = ($resp.Status -eq 200)
+    if (-not $usedDefaultPassword) {
+        $resp = Invoke-Api -Method Post -Uri "$base/api/auth/login" -Body @{
+            username = $r.username; password = $strongPassword; role = $r.role
+        }
+        if ($resp.Status -eq 200) { $script:changedAccounts.Add($r.username) }
+    }
     Test-Status "$($r.role) 角色登录 ($($r.username))" $resp.Status 200
-    if ($resp.Status -eq 200) {
-        $tokens[$r.key] = (ConvertFrom-Json -InputObject $resp.Body).token
+    if ($resp.Status -ne 200) { continue }
+
+    $loginBody = ConvertFrom-Json -InputObject $resp.Body
+    $tokens[$r.key] = $loginBody.token
+
+    # 首次登录必须带强制改密标记；已改过密的回退场景不再断言此标记
+    if ($usedDefaultPassword) {
+        Test-True "$($r.username) 首次登录返回 mustChangePassword=true" ($loginBody.mustChangePassword -eq $true) "实际: $($resp.Body)"
+
+        if ($loginBody.mustChangePassword -eq $true) {
+            # 以企业账号验证业务接口被门禁拦截（其余角色的门禁逻辑相同，不重复断言）
+            if ($r.key -eq 'ent') {
+                $blocked = Invoke-Api -Method Get -Uri "$base/api/enterprises" -Token $loginBody.token
+                Test-Status "强制改密会话访问业务接口返回 403" $blocked.Status 403
+                Test-True "403 响应带 code=PASSWORD_CHANGE_REQUIRED" ($blocked.Body -like '*PASSWORD_CHANGE_REQUIRED*') "实际: $($blocked.Body)"
+            }
+
+            # 弱密码拒绝：新密码仍为 123456 必须被后端驳回
+            $weak = Invoke-Api -Method Post -Uri "$base/api/auth/change-password" -Token $loginBody.token -Body @{
+                oldPassword = $r.password; newPassword = '123456'
+            }
+            Test-Status "$($r.username) 新密码为 123456 被拒绝(400)" $weak.Status 400
+
+            # 合规新密码：改密成功后旧令牌仍被拦截，必须重新登录
+            $changed = Invoke-Api -Method Post -Uri "$base/api/auth/change-password" -Token $loginBody.token -Body @{
+                oldPassword = $r.password; newPassword = $strongPassword
+            }
+            Test-Status "$($r.username) 首次改密成功(200)" $changed.Status 200
+            if ($changed.Status -eq 200) { $script:changedAccounts.Add($r.username) }
+        }
+    }
+
+    # 使用新密码重新登录，取得可访问业务接口的令牌
+    $reLogin = Invoke-Api -Method Post -Uri "$base/api/auth/login" -Body @{
+        username = $r.username; password = $strongPassword; role = $r.role
+    }
+    Test-Status "$($r.role) 改密后重新登录 ($($r.username))" $reLogin.Status 200
+    if ($reLogin.Status -eq 200) {
+        $newBody = ConvertFrom-Json -InputObject $reLogin.Body
+        Test-True "$($r.username) 改密后不再要求改密" ($newBody.mustChangePassword -eq $false) "实际: $($reLogin.Body)"
+        $tokens[$r.key] = $newBody.token
     }
 }
 
@@ -481,6 +599,27 @@ Test-True "CBAM 监管收件箱至少 1 条" ($cbamInbox.Count -ge 1) "实际: $
 
 $resp = Invoke-Api -Method Get -Uri "$base/api/cbam/outbox?limit=10" -Token $tokens['ent']
 Test-Status "CBAM Outbox 列表 企业角色返回 403" $resp.Status 403
+
+# ===== 还原演示账号 =====
+# 本次运行改过密码的演示账号统一重置回初始状态：密码 123456 + must_change_password=1，
+# 保证下次回归与人工演示口径一致。只重置本次实际改过的账号，避免影响人工修改的密码。
+if ($script:changedAccounts.Count -gt 0) {
+    $resp = Invoke-Api -Method Get -Uri "$base/api/users" -Token $tokens['adm']
+    if ($resp.Status -eq 200) {
+        # PowerShell 5.1 的 ConvertFrom-Json 会把顶层 JSON 数组当作单个对象输出，
+        # 必须经管道逐项展开后再收集，否则 @() 会形成「数组套数组」导致按 id 定位失效。
+        $allUsers = @(ConvertFrom-Json -InputObject $resp.Body | ForEach-Object { $_ })
+        foreach ($name in ($script:changedAccounts | Select-Object -Unique)) {
+            $target = $allUsers | Where-Object { $_.username -eq $name } | Select-Object -First 1
+            if ($target) {
+                $reset = Invoke-Api -Method Post -Uri "$base/api/users/$($target.id)/reset-password" -Token $tokens['adm']
+                Test-Status "还原演示账号密码 ($name)" $reset.Status 200
+            }
+        }
+    } else {
+        Write-Host "WARN 无法读取用户列表，跳过演示账号密码还原" -ForegroundColor Yellow
+    }
+}
 
 # ===== 汇总 =====
 # 汇总只统计已执行的断言（跳过项不计入总数）；有失败时逐条打印并返回非零退出码，

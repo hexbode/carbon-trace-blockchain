@@ -204,6 +204,42 @@ public class StubChainGateway implements ChainGateway {
     }
 
     /**
+     * 桩模式直接读取内存凭证上的合规快照位掩码。
+     *
+     * @param certId 认证编号，可为 null
+     * @return 位掩码；未登记返回 0
+     */
+    @Override
+    public int complianceFlagsOf(String certId) {
+        if (certId == null) {
+            return 0;
+        }
+        ChainCertificate cert = certs.get(certId);
+        return cert == null ? 0 : cert.getComplianceFlags();
+    }
+
+    /**
+     * 桩模式直接遍历内存凭证，返回最高的 CR 序号。
+     *
+     * @return 最高认证序号；无凭证返回 0
+     */
+    @Override
+    public long highestCertSeq() {
+        long max = 0L;
+        for (String certId : certs.keySet()) {
+            if (certId == null || certId.length() <= 2 || !certId.startsWith("CR")) {
+                continue;
+            }
+            try {
+                max = Math.max(max, Long.parseLong(certId.substring(2)));
+            } catch (NumberFormatException ignored) {
+                // 非标准编号不参与最高序号计算
+            }
+        }
+        return max;
+    }
+
+    /**
      * 按归一化交易哈希反查；桩模式下的哈希为「stub-编号」伪哈希。
      *
      * @param txHash 交易哈希，大小写与 0x 前缀不敏感

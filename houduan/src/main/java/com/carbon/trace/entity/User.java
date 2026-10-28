@@ -62,6 +62,12 @@ public class User {
     /** 状态：active 正常 / inactive 停用；仅 active 账号允许登录。 */
     private String status;
 
+    /**
+     * 首次登录强制改密标志：true 时会话仅允许调用改密与退出接口，
+     * 改密成功后清零；演示账号初始化与管理员重置密码时置为 true。
+     */
+    private Boolean mustChangePassword;
+
     /** 创建时间（注册日期）；新增时未指定则默认当日。 */
     private LocalDate createdAt;
 }

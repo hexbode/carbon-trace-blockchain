@@ -47,7 +47,7 @@ flowchart LR
 
 ## 2. 核心能力
 
-- **链上存证与核验**：认证、撤销、作废都写入 `CarbonCertRegistry`，证书状态（`VALID / REVOKED / INVALID`）以链上为准，业务库仅作展示。
+- **链上存证与核验**：认证、撤销、作废都写入存证合约，证书状态（`VALID / REVOKED / INVALID`）以链上为准，业务库仅作展示。存证合约采用「逻辑与数据分离」：`CertRegistryData` 只保存状态，当前生产逻辑为 `CertRegistryLogicV2`（在 V1 业务规则上增加 `highestCertSeq` 最高序号视图）；升级只需部署新逻辑并调用 `updateLogic`，历史存证无需迁移。
 - **合规判定上链**：配额、环比波动、活动数据为 0、排放因子不符、迟报五类规则由 `CarbonCompliance` 判定并返回结果位掩码；链不可用时可按配置回退到本地 Java 规则。
 - **证书体系**：真实可扫描二维码（`qrcode`）、证书详情弹窗、横向 A4 PDF 下载（`jsPDF` + Canvas 绘制），PDF 与弹窗内均含认证专用章与核验二维码。
 - **扫码核验**：公共端支持摄像头逐帧识别（`jsQR`），也支持拍照 / 上传二维码图片识别；识别后自动定位防伪码并查询。
@@ -110,7 +110,7 @@ flowchart TB
     API[Spring Boot 3.5<br/>JWT + 业务服务]
     DB[(MySQL 8)]
     WB[WeBASE-Front]
-    CH[FISCO BCOS v3.17.0<br/>CarbonCertRegistry / CarbonCompliance]
+    CH[FISCO BCOS v3.17.0<br/>CertRegistryData / CertRegistryLogicV2<br/>CarbonCompliance]
 
     PC --> NG
     MB --> NG
@@ -131,7 +131,7 @@ flowchart TB
 ```text
 碳链通/
 ├── houduan/                        后端（Spring Boot）
-│   ├── contracts/                  CarbonCertRegistry.sol / CarbonCompliance.sol / deploy-contracts.sh
+│   ├── contracts/                  CertRegistryData.sol / CertRegistryLogicV1.sol / V2 / CarbonCompliance.sol / deploy-contracts.sh
 │   ├── src/main/java/com/carbon/trace/
 │   │   ├── chain/                  链网关、WeBASE 实现、离线桩、历史数据迁移、对账
 │   │   ├── common/                 JWT、鉴权拦截器、异常处理、电子防伪码、数据隔离
@@ -140,7 +140,7 @@ flowchart TB
 │   │   ├── entity/ mapper/         21 个实体与 Mapper
 │   │   └── service/impl/           16 个业务服务
 │   ├── src/main/resources/         application.yml、chain/*.abi.json
-│   ├── api-tests.ps1               接口回归脚本（96 项断言，含 CBAM/对账/Outbox）
+│   ├── api-tests.ps1               接口回归脚本（建库结构、强制改密、CBAM/对账/Outbox 等）
 │   └── mvnw / mvnw.cmd             Maven 包装器
 ├── qianduan/                       前端（Vue 3 + Vite）
 │   ├── src/api/                    16 个接口模块 + 统一 request 封装
@@ -184,10 +184,11 @@ CREATE DATABASE carbon_emission DEFAULT CHARACTER SET utf8mb4;
 
 `carbon_emission_db.sql` → `03_profile_settings.sql` → `04_regulator_organizations.sql`
 → `05_sync_triggers.sql` → `06_align_schema.sql` → `07_align_all_schema.sql` → `08_user_avatar.sql`
-→ `09_cbam.sql` → `10_cbam_version_reconcile.sql` → `11_cbam_outbox.sql`
+→ `09_cbam.sql` → `10_cbam_version_reconcile.sql` → `11_cbam_outbox.sql` → `12_must_change_password.sql`
 
-> 注意：`carbon_emission_db.sql` 与 `05_sync_triggers.sql` 仍保留已下线链表 `blocks`、`block_transactions` 的建表语句。
-> 当前实际库结构为 **22 张表（11 张业务表 + 11 张 CBAM 表）、无任何哈希列**；如用脚本重建库，请先按现状更新这两处。
+脚本重建后为 **22 张表（11 张业务表 + 11 张 CBAM 表）、无任何链表与哈希列**；
+早期本地模拟链表 `blocks`、`block_transactions` 已从全部脚本中移除，`06_align_schema.sql`
+开头还会幂等清理旧环境残留的这两张表。
 
 数据库连接在 `houduan/src/main/resources/application.yml`，默认 `root / 123456`，请按本机实际修改。
 
@@ -261,11 +262,35 @@ curl -X POST 'http://127.0.0.1:5002/WeBASE-Front/privateKey?type=2&userName=carb
 #    b. Front 本地私钥（演示环境最省事）
 curl 'http://127.0.0.1:5002/WeBASE-Front/privateKey?groupId=group0&type=0&userName=carbon-backend'
 
-# 3) 编译 → 部署两个合约 → 注册 ABI（需要 solc 0.8.30）
+# 3) 编译 → 部署 数据合约 + 逻辑合约 V1（+ 合规合约）→ 激活 → 注册 ABI（需要 solc 0.8.30）
 cd houduan/contracts
 ./deploy-contracts.sh --user 0x<address> --solc /usr/local/bin/solc-0.8.30
-#    可追加 --out /opt/carbon-trace/application-ubuntu.yml 直接生成配置片段
+#    脚本会依次部署 CertRegistryData、CertRegistryLogicV1、CarbonCompliance，
+#    再调用数据合约 updateLogic 激活逻辑合约，并把 ABI 写回 src/main/resources/chain。
+#    可追加 --out /opt/carbon-trace/application-ubuntu.yml 直接生成完整配置。
+
+# 4) 逻辑升级（V1 → V2）：只新增一笔 updateLogic 治理交易，历史存证不迁移
+./deploy-contracts.sh --user 0x<address> \
+  --upgrade-logic 0x<dataAddress> \
+  --logic-contract CertRegistryLogicV2 \
+  --initial-seq <当前链上最高认证序号，如 CR000085 填 85> \
+  --solc /usr/local/bin/solc-0.8.30
+#    脚本输出新的逻辑合约地址；把配置中的 registry.name/address 更新为该版本后重启后端。
+#    旧逻辑立即失权（写入会 revert NOT_LOGIC），链上数据与计数保持不变。
+#    --initial-seq 必须是真实链上最高序号：偏小只会多做逐号检查，偏大才可能跳过历史编号。
 ```
+
+> **逻辑与数据分离**：`CertRegistryData` 只保存防伪码索引、证书状态与写入者集合，
+> 所有写入函数受 `onlyLogic` 限制；`CertRegistryLogicV1/V2` 只含业务规则。
+> 后端只直连逻辑合约，`CARBON_CHAIN_REGISTRY_ADDRESS` 填逻辑合约地址；
+> 数据合约地址仅用于治理与升级（`updateLogic`），不在后端配置中出现。
+>
+> **编号快路径**：V2 的 `highestCertSeq()` 返回链上最高认证序号（升级时由 `--initial-seq` 初始化）。
+> 新增排放记录分配编号时，序号高于该值即跳过逐号链上占用检查；视图不可用（V1）时自动回退到逐号检查。
+>
+> **合规合约不要随存证重部署**：部署脚本每次都会新部署一个 `CarbonCompliance`，
+> 但既有部署已在该合约中保存阈值/配额等治理参数；升级存证合约时应保留原
+> `compliance.address`，只更新 `registry`，否则治理参数会回到默认值。
 
 通过环境变量或 `application-local.yml`（已忽略，不入库）提供真实配置：
 
@@ -276,7 +301,7 @@ cd houduan/contracts
 | `CARBON_CHAIN_GROUP_ID` | 群组标识，默认 `group0` |
 | `CARBON_CHAIN_SIGN_USER_ID` | WeBASE-Sign 托管用户 ID |
 | `CARBON_CHAIN_USER_ADDRESS` | 本地私钥账户地址（与 Sign 二选一） |
-| `CARBON_CHAIN_REGISTRY_ADDRESS` | 存证合约地址 |
+| `CARBON_CHAIN_REGISTRY_ADDRESS` | 认证存证**逻辑合约**地址（数据合约地址仅治理使用） |
 | `CARBON_CHAIN_COMPLIANCE_ADDRESS` | 合规合约地址 |
 | `CARBON_JWT_SECRET` | 生产必须覆盖的 JWT 密钥 |
 
@@ -284,23 +309,29 @@ cd houduan/contracts
 > 与 MySQL 绑定在 `127.0.0.1`，避免无鉴权的联盟链接口对外暴露。
 
 历史认证记录可通过 `carbon.chain.migration.enabled=true` 一次性写入链上（以业务库为准），完成后请改回 `false`。
+切换到新的数据合约后需要开启一次，把业务库现有证书重新写入新数据合约；此后逻辑升级不再需要迁移。
 
 ---
 
 ## 9. 测试账号
 
-| 角色 | 用户名 | 密码 | 说明 |
+| 角色 | 用户名 | 初始密码 | 说明 |
 | --- | --- | --- | --- |
 | 企业端 | `enterprise01` | `123456` | 数据填报、认证申请、证书查看 |
 | 监管端 | `regulator01` | `123456` | 企业 / 机构 / 因子管理、撤销认证、处理告警 |
 | 审核端 | `auditor01` | `123456` | 报告审核（通过 / 驳回） |
 | 系统管理员 | `admin` | `123456` | 超级角色，拥有全部权限 |
 
+> 以上账号首次登录会被强制跳转「修改密码」页，必须设置 ≥ 8 位、同时包含大小写字母与数字、
+> 且不等于 `123456` 的新密码后才能进入业务界面；监管端重置密码后同样会强制改密。
+> 改密成功需重新登录（旧令牌仍被后端判定为强制改密会话）。
+> `api-tests.ps1` 会自动完成改密并在结束时把演示账号重置回初始状态。
+
 ---
 
 ## 10. 接口与回归测试
 
-- 后端共 **18 个 Controller、107 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
+- 后端共 **18 个 Controller、108 个 REST 接口**，完整清单见 [docs/接口清单.md](docs/接口清单.md)。
 - 免登录白名单：`/api/auth/login`、`/api/public/**`、`/api/certifications/by-fingerprint/**`、
   `/api/certifications/verify`。
 - 登录态通过 `Authorization: Bearer <token>` 传递；角色取值 `enterprise / auditor / regulator / admin`。
@@ -312,10 +343,11 @@ cd houduan
 powershell -ExecutionPolicy Bypass -File api-tests.ps1
 ```
 
-脚本分 10 组共 **96 项断言**（认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
-其他业务、链模式与合规判定、CBAM 合规/对账/Outbox），全部通过时退出码为 0。stub 模式下会播种演示证书，
-因此防伪码核验、示例证书等断言与真实链行为一致；CBAM 组依赖 `09_cbam.sql`、`10_cbam_version_reconcile.sql`
-与 `11_cbam_outbox.sql` 的种子/迁移数据。
+脚本分 11 组（含数据库结构前置检查与认证、公共端、认证记录、角色越权、监管机构、企业管理、统计、
+其他业务、链模式与合规判定、CBAM 合规/对账/Outbox），断言数随演示账号状态动态变化，全部通过时退出码为 0。
+stub 模式下会播种演示证书，因此防伪码核验、示例证书等断言与真实链行为一致；
+CBAM 组依赖 `09_cbam.sql`、`10_cbam_version_reconcile.sql` 与 `11_cbam_outbox.sql` 的种子/迁移数据。
+数据库结构检查可用 `CARBON_DB_NAME` 指向临时重建库做「22 张表、无链表残留」验收。
 
 ---
 
@@ -349,6 +381,9 @@ powershell -ExecutionPolicy Bypass -File api-tests.ps1
   且 `allowCredentials=false`，登录态只走 `Authorization` 头。
 - **账号安全**：密码以 BCrypt 哈希存储，启动时幂等迁移历史明文；连续 5 次登录失败锁定 5 分钟（HTTP 429）；
   用户资料更新走字段白名单，`role / status` 仅监管 / 管理员可改。
+- **强制改密**：`users.must_change_password=1` 的账号登录后，令牌只能访问
+  `/api/auth/change-password` 与 `/api/auth/logout`，其余 `/api/**` 返回 403
+  （`code=PASSWORD_CHANGE_REQUIRED`）；新密码须 ≥ 8 位并含大小写字母与数字，且不得为 `123456`。
 - **JWT**：24 小时有效期；生产必须用 `CARBON_JWT_SECRET` 覆盖仓库默认值。
 - **链服务边界**：WeBASE 各端口仅绑定本机回环地址；配置中不落私钥，只持有 `signUserId` 或账户地址。
 
@@ -416,10 +451,8 @@ A：两者都会占用本机 443。演示环境将 nginx SSL 监听改为 4430�
 
 ## 15. 已知待办
 
-- `database/` 部分脚本仍保留已下线的 `blocks`、`block_transactions` 建表语句，需按当前 11 张表更新。
 - 合约治理（`addWriter` / `removeWriter`）目前通过 WeBASE-Front 控制台或脚本执行，尚未提供平台内入口。
-- 合约升级仍采用「部署新合约 + 迁移数据」，未引入代理合约（可升级模式）。
-- 演示账号统一弱密码 `123456`（已有登录锁定缓解），可考虑增加「首次登录强制改密」。
+- 认证存证已改为「逻辑/数据分离」，后续更换逻辑版本只需 `--upgrade-logic` 并更新逻辑合约地址。
 
 ---
 

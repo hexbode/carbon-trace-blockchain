@@ -1,10 +1,18 @@
 package com.carbon.trace.service;
 
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 链上同步服务：统一处理「事务提交后写链 + 失败重试 + 最终失败告警」。
@@ -24,6 +32,26 @@ public class ChainSyncService {
     private static final long BASE_BACKOFF_MS = 500L;
 
     private final AlertService alertService;
+
+    /**
+     * 提交后并行任务执行器（3 线程）：
+     * 一次业务动作可能包含多条互不依赖的提交后任务（如镜像写链 + 合规判定），
+     * 串行执行会让响应等待两者之和，并行后只需等待最慢的一条。
+     */
+    private final ExecutorService executor = Executors.newFixedThreadPool(3, runnable -> {
+        Thread thread = new Thread(runnable, "chain-after-commit");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /**
+     * 一条提交后任务：动作描述用于日志与失败告警，task 为实际执行逻辑。
+     *
+     * @param action 动作描述
+     * @param task   链上写或合规判定任务
+     */
+    public record ChainJob(String action, ChainTask task) {
+    }
 
     /**
      * 构造器注入依赖，由 Spring 容器创建，业务代码不应手工实例化。
@@ -70,6 +98,66 @@ public class ChainSyncService {
         } else {
             execute(action, enterpriseId, enterpriseName, period, task);
         }
+    }
+
+    /**
+     * 事务提交后并行执行多条互不依赖的任务，并等待全部结束。
+     *
+     * 适用场景：新增排放记录后，「合规镜像写链」与「合规判定并生成告警」互不依赖，
+     * 串行会让接口响应等待约 4 秒，并行后只需等待最慢的一条（约 2 秒）。
+     * 每条任务独立重试、独立失败告警；任一失败不会中断其他任务。
+     *
+     * @param enterpriseId   关联企业编号（失败告警用，可空）
+     * @param enterpriseName 企业名称（失败告警用，可空）
+     * @param period         报告期（失败告警用，可空）
+     * @param jobs           待执行任务列表；为空时直接返回
+     */
+    public void afterCommitAll(String enterpriseId, String enterpriseName, String period, List<ChainJob> jobs) {
+        if (jobs == null || jobs.isEmpty()) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    executeAll(enterpriseId, enterpriseName, period, jobs);
+                }
+            });
+        } else {
+            executeAll(enterpriseId, enterpriseName, period, jobs);
+        }
+    }
+
+    /**
+     * 并行执行任务并等待全部结束；单条任务内部已处理重试与失败告警，此处只负责等待。
+     *
+     * @param enterpriseId   关联企业编号
+     * @param enterpriseName 企业名称
+     * @param period         报告期
+     * @param jobs           任务列表
+     */
+    private void executeAll(String enterpriseId, String enterpriseName, String period, List<ChainJob> jobs) {
+        List<CompletableFuture<Void>> futures = new ArrayList<>(jobs.size());
+        for (ChainJob job : jobs) {
+            futures.add(CompletableFuture.runAsync(
+                    () -> execute(job.action(), enterpriseId, enterpriseName, period, job.task()), executor));
+        }
+        for (CompletableFuture<Void> future : futures) {
+            try {
+                future.join();
+            } catch (CompletionException e) {
+                // execute 内部已记录日志并生成失败告警，这里只保证等待流程不中断
+                log.warn("提交后并行任务异常收尾：{}", e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            } catch (RuntimeException e) {
+                log.warn("提交后并行任务执行失败：{}", e.getMessage());
+            }
+        }
+    }
+
+    /** 容器关闭时停止并行任务线程池；已提交任务允许跑完，不阻塞应用关闭 */
+    @PreDestroy
+    public void shutdownExecutor() {
+        executor.shutdown();
     }
 
     /**

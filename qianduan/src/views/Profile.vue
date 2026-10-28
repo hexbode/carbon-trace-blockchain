@@ -123,7 +123,7 @@
                   <el-input v-model="pwdForm.oldPassword" type="password" placeholder="请输入当前密码" show-password />
                 </el-form-item>
                 <el-form-item label="新密码" prop="newPassword">
-                  <el-input v-model="pwdForm.newPassword" type="password" placeholder="8-20位，含字母和数字" show-password />
+                  <el-input v-model="pwdForm.newPassword" type="password" placeholder="8-20位，含大小写字母和数字" show-password />
                 </el-form-item>
                 <!-- 密码强度：三段指示条与文案均由新密码实时计算 -->
                 <el-form-item label="密码强度">
@@ -369,12 +369,14 @@ const pwdFormRef = ref()
 // 修改密码表单：当前密码、新密码、确认密码
 const pwdForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
 
-// 新密码自定义校验：必填、须含字母与数字且8-20位、与确认密码联动校验
+// 新密码自定义校验：必填、8-20 位且同时含大小写字母与数字、不得为初始密码，与确认密码联动校验
 const validateNewPwd = (rule, value, callback) => {
   if (!value) {
     callback(new Error('请输入新密码'))
-  } else if (!/^(?=.*[A-Za-z])(?=.*\d).{8,20}$/.test(value)) {
-    callback(new Error('密码须为8-20位且同时包含字母和数字'))
+  } else if (value === '123456') {
+    callback(new Error('新密码不能使用初始密码 123456'))
+  } else if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,20}$/.test(value)) {
+    callback(new Error('密码须为8-20位且同时包含大小写字母和数字'))
   } else if (pwdForm.confirmPassword && value !== pwdForm.confirmPassword) {
     pwdFormRef.value.validateField('confirmPassword')
     callback()

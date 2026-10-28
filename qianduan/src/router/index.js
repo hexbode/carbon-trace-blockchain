@@ -63,6 +63,14 @@ const routes = [
     component: () => import('@/views/Login.vue'),
     meta: { title: '登录' }
   },
+  // 首次登录强制改密页（独立路由，不进入主布局）
+  // 仅 mustChangePassword=true 的会话可停留在此页；改密成功后清理登录态并重新登录
+  {
+    path: '/change-password',
+    name: 'ChangePassword',
+    component: () => import('@/views/ChangePassword.vue'),
+    meta: { title: '修改密码' }
+  },
   // 公共查询端（无需登录，面向社会公众的认证查询入口）
   {
     path: '/public',
@@ -157,10 +165,28 @@ router.beforeEach((to, from, next) => {
   // 角色权限校验：若路由声明了 roles 且当前用户角色不在其中，则重定向到对应端首页
   // 角色来源为登录成功后持久化的用户信息；admin 在监管端路由的 roles 中同样被允许
   const user = JSON.parse(userStr)
+  // 对应端首页映射：强制改密会话与角色越权都复用同一份跳转表
+  const redirectMap = { enterprise: '/enterprise/home', auditor: '/auditor/home', regulator: '/regulator/home', admin: '/regulator/home' }
+
+  // 强制改密会话：除改密页外的任何页面都重定向回改密页，避免进入业务布局
+  if (user.mustChangePassword === true) {
+    if (to.path !== '/change-password') {
+      next('/change-password')
+    } else {
+      next()
+    }
+    return
+  }
+
+  // 已完成改密的用户访问改密页时回到对应端首页，避免停留在无意义的独立页面
+  if (to.path === '/change-password') {
+    next(redirectMap[user.role] || '/enterprise/home')
+    return
+  }
+
   if (to.meta.roles && !to.meta.roles.includes(user.role)) {
     // 重定向到对应端首页
     // 未知角色回退到企业首页，避免停留在无权限页面
-    const redirectMap = { enterprise: '/enterprise/home', auditor: '/auditor/home', regulator: '/regulator/home', admin: '/regulator/home' }
     next(redirectMap[user.role] || '/enterprise/home')
     return
   }
