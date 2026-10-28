@@ -3,10 +3,10 @@
 # 碳链通 · 合约部署 / 升级脚本（Linux / Ubuntu + WeBASE 3.x）
 #
 # 作用：
-#   部署模式：编译 Solidity → 部署 数据合约 + 逻辑合约 V1（+ 合规合约）
+#   部署模式：编译 Solidity → 部署 数据合约 + 逻辑合约（默认 V1，生产推荐 V2）+ 合规合约 + CBAM 锚点合约
 #             → 调数据合约 updateLogic 激活逻辑 → 注册 ABI → 可选写入 yml
 #   升级模式：只编译并部署新的逻辑合约 → 调数据合约 updateLogic(newLogic)
-#             → 注册 ABI → 输出新的 registry 地址（历史存证无需迁移）
+#             → 注册 ABI → 输出新的 registry 地址（历史存证无需迁移；不部署/不改动合规与锚点合约）
 #
 # 前置：
 #   1. FISCO BCOS 3.x 节点 + WeBASE-Front（默认 http://127.0.0.1:5002）已启动；
@@ -16,7 +16,7 @@
 #                          返回的 address 即 --user，同时作为数据合约初始 writer。
 #
 # 用法：
-#   # 首次部署（数据 + 逻辑 V1 + 合规）
+#   # 首次部署（数据 + 逻辑 + 合规；脚本默认 V1，生产推荐 V2）
 #   ./deploy-contracts.sh --user 0x... --solc /usr/local/bin/solc-0.8.30
 #   # 升级逻辑（只涉及一笔 updateLogic 治理交易，不迁移历史存证）
 #   ./deploy-contracts.sh --user 0x... --upgrade-logic 0x<dataAddress> \
@@ -52,15 +52,19 @@ ABI_OUT_DIR="$(cd "$CONTRACT_DIR/.." && pwd)/src/main/resources/chain"
 # ---------- 命令行参数 ----------
 #   --front <url>          WeBASE-Front 地址，默认 http://127.0.0.1:5002
 #   --group <id>           群组标识，默认 group0
-#   --user <address>       交易账户地址（必填；Sign 托管时仍用于写入数据合约初始 writer）
+#   --user <address>       交易账户地址（必填；Sign 托管时仍用于写入数据合约初始 writer；升级时须为数据合约 owner）
 #   --sign-user-id <id>    提供则走 Sign 托管接口，私钥不出 WeBASE-Sign
 #   --solc <path>          提供则用本地 solc 编译，否则交给 WeBASE 内置编译器
 #   --out <path>           首次部署写出完整 yml；升级模式写出仅含 registry 的片段
 #   --upgrade-logic <addr> 升级模式：数据合约地址；只部署新逻辑并调用 updateLogic
-#   --logic-contract <name> 逻辑合约名，默认部署模式 V1、升级模式 V2
-#   --initial-seq <n>       V2 构造参数：当前链上最高认证序号（如 CR000085 → 85）
+#   --logic-contract <name> 逻辑合约名，默认部署模式 V1（生产推荐 V2，需 --initial-seq）、升级模式 V2
+#   --initial-seq <n>       V2 构造参数，两种口径：
+#                             逻辑升级（同一数据合约）→ 该数据合约的真实链上最高序号
+#                             （含已作废/已撤销、业务库已删除但链上留存的编号）；
+#                             新建数据合约 + 迁移 → 迁移集合的最大序号（不迁移填 0）。
+#                           必须等于真实最高值：偏大仅多检查，偏小会复用历史编号
 #   --abi-out <dir>        ABI 输出目录，默认 ../src/main/resources/chain
-#   -h|--help              打印脚本头部第 2~48 行说明后退出
+#   -h|--help              打印脚本头部说明（含全部参数）后退出
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --front)          FRONT="$2"; shift 2 ;;
@@ -73,7 +77,7 @@ while [[ $# -gt 0 ]]; do
     --logic-contract) LOGIC_CONTRACT="$2"; shift 2 ;;
     --initial-seq)    INITIAL_SEQ="$2"; shift 2 ;;
     --abi-out)        ABI_OUT_DIR="$2"; shift 2 ;;
-    -h|--help)        sed -n '2,48p' "$0"; exit 0 ;;
+    -h|--help)        sed -n '2,67p' "$0"; exit 0 ;;
     *) echo "未知参数：$1" >&2; exit 1 ;;
   esac
 done
@@ -322,6 +326,7 @@ if [[ "$MODE" == 'upgrade' ]]; then
 carbon.chain.contracts.registry.name=$LOGIC_CONTRACT
 carbon.chain.contracts.registry.address=$NEW_LOGIC_ADDR
 # 数据合约地址保持不变：$UPGRADE_DATA
+# 合规合约与 CBAM 锚点合约不受本次升级影响，地址与治理参数保持原值
 # 历史存证无需迁移；重启后端后新逻辑即生效
 EOF
   if [[ -n "$OUT_FILE" ]]; then
@@ -341,11 +346,12 @@ EOF
 fi
 
 # ---------- 首次部署模式 ----------
-# 步骤 1/5：编译三个合约，并分别取出 ABI 与 bytecodeBin。
+# 步骤 1/5：编译四个合约，并分别取出 ABI 与 bytecodeBin。
 echo '[1/5] 编译合约 ...'
 COMPLIANCE_JSON=$(compile_contract 'CarbonCompliance' "$CONTRACT_DIR/CarbonCompliance.sol")
 DATA_JSON=$(compile_contract 'CertRegistryData' "$CONTRACT_DIR/CertRegistryData.sol")
 LOGIC_JSON=$(compile_contract "$LOGIC_CONTRACT" "$LOGIC_SOURCE")
+ANCHOR_JSON=$(compile_contract 'CbamAnchorRegistry' "$CONTRACT_DIR/CbamAnchorRegistry.sol")
 
 COMPLIANCE_ABI=$(echo "$COMPLIANCE_JSON" | json_get abiInfo)
 COMPLIANCE_BIN=$(echo "$COMPLIANCE_JSON" | json_get bytecodeBin)
@@ -353,28 +359,34 @@ DATA_ABI=$(echo "$DATA_JSON" | json_get abiInfo)
 DATA_BIN=$(echo "$DATA_JSON" | json_get bytecodeBin)
 LOGIC_ABI=$(echo "$LOGIC_JSON" | json_get abiInfo)
 LOGIC_BIN=$(echo "$LOGIC_JSON" | json_get bytecodeBin)
+ANCHOR_ABI=$(echo "$ANCHOR_JSON" | json_get abiInfo)
+ANCHOR_BIN=$(echo "$ANCHOR_JSON" | json_get bytecodeBin)
 
-[[ -n "$COMPLIANCE_BIN" && -n "$DATA_BIN" && -n "$LOGIC_BIN" ]] || {
-  echo "编译失败：$(echo "$COMPLIANCE_JSON" | head -c 200) / $(echo "$DATA_JSON" | head -c 200) / $(echo "$LOGIC_JSON" | head -c 200)" >&2
+[[ -n "$COMPLIANCE_BIN" && -n "$DATA_BIN" && -n "$LOGIC_BIN" && -n "$ANCHOR_BIN" ]] || {
+  echo "编译失败：$(echo "$COMPLIANCE_JSON" | head -c 200) / $(echo "$DATA_JSON" | head -c 200) / $(echo "$LOGIC_JSON" | head -c 200) / $(echo "$ANCHOR_JSON" | head -c 200)" >&2
   exit 1
 }
 echo '  编译成功'
 
-# 步骤 2/5：部署合规合约与数据合约。
+# 步骤 2/5：部署合规合约、数据合约与 CBAM 锚点合约。
 # WeBASE 3.x 的 funcParam 是 List<String>，每个元素必须是「参数值的 JSON 字面量」：
 #   - CarbonCompliance 无构造参数 → []；
 #   - CertRegistryData 构造函数为 address[] → ["0x..."] 作为单个参数的 JSON 文本，
 #     整体再包一层数组，即 [ "[\"0x...\"]" ]；这里用 python 生成嵌套 JSON，避免手工转义。
-echo '[2/5] 部署合规合约与数据合约 ...'
+echo '[2/5] 部署合规合约、数据合约与 CBAM 锚点合约 ...'
 COMPLIANCE_ADDR=$(deploy_contract 'CarbonCompliance' "$COMPLIANCE_ABI" "$COMPLIANCE_BIN" '[]' | tr -d '"' | tr -d '\n')
 DATA_CTOR=$(python3 -c "import json,sys;print(json.dumps([json.dumps([sys.argv[1]])]))" "$USER")
 DATA_ADDR=$(deploy_contract 'CertRegistryData' "$DATA_ABI" "$DATA_BIN" "$DATA_CTOR" | tr -d '"' | tr -d '\n')
+# 锚点合约构造参数同样是 address[] initialWriters，后端签名账户作为初始 writer
+ANCHOR_CTOR=$(python3 -c "import json,sys;print(json.dumps([json.dumps([sys.argv[1]])]))" "$USER")
+ANCHOR_ADDR=$(deploy_contract 'CbamAnchorRegistry' "$ANCHOR_ABI" "$ANCHOR_BIN" "$ANCHOR_CTOR" | tr -d '"' | tr -d '\n')
 
-for addr in "$COMPLIANCE_ADDR" "$DATA_ADDR"; do
+for addr in "$COMPLIANCE_ADDR" "$DATA_ADDR" "$ANCHOR_ADDR"; do
   [[ "$addr" =~ ^0x[0-9a-fA-F]{40}$ ]] || { echo "部署失败，返回：$addr" >&2; exit 1; }
 done
 echo "  CarbonCompliance   -> $COMPLIANCE_ADDR"
 echo "  CertRegistryData   -> $DATA_ADDR"
+echo "  CbamAnchorRegistry -> $ANCHOR_ADDR"
 
 # 步骤 3/5：部署逻辑合约并激活。
 # 顺序必须是「先数据、后逻辑、再 updateLogic」：数据合约初始 logic=address(0)，
@@ -397,8 +409,10 @@ echo "  updateLogic 已上链：$TX_HASH"
 echo '[4/5] 注册 ABI ...'
 register_abi 'CarbonCompliance' "$COMPLIANCE_ADDR" "$COMPLIANCE_ABI" "$COMPLIANCE_BIN"
 register_abi 'CertRegistryData' "$DATA_ADDR" "$DATA_ABI" "$DATA_BIN"
+register_abi 'CbamAnchorRegistry' "$ANCHOR_ADDR" "$ANCHOR_ABI" "$ANCHOR_BIN"
 register_abi "$LOGIC_CONTRACT" "$LOGIC_ADDR" "$LOGIC_ABI" "$LOGIC_BIN"
 write_abi_file "$ABI_OUT_DIR/CertRegistryData.abi.json" "$DATA_ABI"
+write_abi_file "$ABI_OUT_DIR/CbamAnchorRegistry.abi.json" "$ANCHOR_ABI"
 write_abi_file "$ABI_OUT_DIR/CertRegistryLogic.abi.json" "$LOGIC_ABI"
 
 # 步骤 5/5：输出配置。
@@ -410,7 +424,10 @@ carbon.chain.webase.user-address=$USER
 carbon.chain.contracts.registry.name=$LOGIC_CONTRACT
 carbon.chain.contracts.registry.address=$LOGIC_ADDR
 carbon.chain.contracts.compliance.address=$COMPLIANCE_ADDR
-# 数据合约（仅治理/升级使用，后端不直连）：$DATA_ADDR
+carbon.chain.contracts.registry-data.address=$DATA_ADDR
+carbon.chain.contracts.cbam-anchor.address=$ANCHOR_ADDR
+# 数据合约：治理页读取 owner / writers，升级时调 updateLogic
+# CBAM 锚点合约：可选组件，地址为空时申报包不写链上锚点
 # 注意：沿用既有部署时请保留原 compliance.address；本次新部署的合规合约没有既有治理参数
 EOF
 
@@ -430,6 +447,10 @@ carbon:
         address: $LOGIC_ADDR
       compliance:
         address: $COMPLIANCE_ADDR
+      registry-data:
+        address: $DATA_ADDR
+      cbam-anchor:
+        address: $ANCHOR_ADDR
 EOF
   echo "  已写入：$OUT_FILE"
 fi

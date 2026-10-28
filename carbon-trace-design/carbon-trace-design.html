@@ -518,11 +518,11 @@ flowchart TB
       <div class="grid-2">
         <div class="card">
           <h4>CertRegistryData + CertRegistryLogicV2 · 认证存证</h4>
-          <p>数据合约只保存防伪码索引、证书状态、写入者集合与计数，所有写入受 <code>onlyLogic</code> 限制；逻辑合约承载 14 个外部业务函数（3 个治理、3 个写、8 个读），V2 额外提供 <code>highestCertSeq()</code> 最高序号视图，供后端编号分配时跳过逐号链查询。升级时部署新逻辑并调用 <code>updateLogic</code>，数据地址与历史存证保持不变，旧逻辑立即失权。</p>
+          <p>数据合约只保存防伪码索引、证书状态、写入者集合与计数，所有写入受 <code>onlyLogic</code> 限制；逻辑合约 ABI 共 20 个函数（16 个业务函数：3 个治理、3 个写、10 个读；另有 4 个状态常量 getter），V2 额外提供 <code>highestCertSeq()</code> 最高序号视图，供后端编号分配时跳过逐号链查询。升级时部署新逻辑并调用 <code>updateLogic</code>，数据地址与历史存证保持不变，旧逻辑立即失权。</p>
         </div>
         <div class="card">
           <h4>CarbonCompliance · 合规判定</h4>
-          <p>18 个外部函数：阈值与配额治理、期末 / 年度总量与因子镜像维护，以及 <code>checkCompliance</code>、<code>checkFluctuation</code>、<code>checkActivity</code>、<code>checkFactor</code>、<code>checkLateReport</code>、<code>checkAll</code> 六类判定入口。</p>
+          <p>ABI 共 34 个函数（18 个业务/治理函数 + 4 个状态变量 getter + 12 个常量 getter）：阈值与配额治理、期末 / 年度总量与因子镜像维护，以及 <code>checkCompliance</code>、<code>checkFluctuation</code>、<code>checkActivity</code>、<code>checkFactor</code>、<code>checkLateReport</code>、<code>checkAll</code> 六类判定入口。</p>
         </div>
       </div>
       <div class="note">

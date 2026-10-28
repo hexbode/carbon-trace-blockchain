@@ -1,0 +1,235 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address[]",
+        "name": "initialWriters",
+        "type": "address[]"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "bytes32",
+        "name": "id",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "declarationNo",
+        "type": "string"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "reportYear",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "dataVersion",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "snapshotHash",
+        "type": "bytes32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint64",
+        "name": "anchoredAt",
+        "type": "uint64"
+      },
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "anchoredBy",
+        "type": "address"
+      }
+    ],
+    "name": "AnchorWritten",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bool",
+        "name": "allowed",
+        "type": "bool"
+      }
+    ],
+    "name": "WriterChanged",
+    "type": "event"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "addWriter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "declarationNo",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "reportYear",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "dataVersion",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "snapshotHash",
+        "type": "bytes32"
+      }
+    ],
+    "name": "anchor",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "declarationNo",
+        "type": "string"
+      }
+    ],
+    "name": "anchorOf",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "exists",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "reportYear",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "dataVersion",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "snapshotHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "uint64",
+        "name": "anchoredAt",
+        "type": "uint64"
+      },
+      {
+        "internalType": "address",
+        "name": "anchoredBy",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "declarationNoOut",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "declarationNo",
+        "type": "string"
+      }
+    ],
+    "name": "existsOf",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "owner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "name": "removeWriter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "writers",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]

@@ -12,9 +12,9 @@ import "./CertRegistryLogicV1.sol";
  *
  * @dev 升级方式：部署本合约（构造参数含初始最高序号）→ 数据合约 updateLogic(本合约)。
  *      - highestCertSeqValue 只增不减；certify 成功后按认证编号的序号更新；
- *      - 初始值由部署脚本传入「当前链上最高认证序号」，避免升级后把历史编号误判为空闲；
- *      - 若初始值偏小，后端只会多一些逐号检查（安全方向），不会误用历史编号；
- *        若初始值偏大，才可能跳过历史编号检查，因此部署时必须取真实链上最大值。
+ *      - 初始值由部署脚本传入「当前链上最高认证序号」，必须等于真实链上最大值；
+ *      - 初始值偏大只会让后端多做逐号检查（安全，仅性能略降）；
+ *        偏小则新编号会被判定为“高于链上最高值”而跳过检查，可能复用历史编号，因此禁止估填 0。
  */
 contract CertRegistryLogicV2 is CertRegistryLogicV1 {
 
@@ -42,7 +42,7 @@ contract CertRegistryLogicV2 is CertRegistryLogicV1 {
      * @notice 链上已出现的最高认证序号。
      *
      * 后端用它判断「新编号是否可能已上链」：序号大于该值必然未上链，可跳过逐号链查询。
-     * 返回 0 表示尚无任何认证或初始值未设置，调用方应回退到逐号检查。
+     * 返回 0 只对全新链成立；升级时若把初始值误设为 0，后端会跳过全部逐号检查并可能复用历史编号。
      */
     function highestCertSeq() external view returns (uint256) {
         return highestCertSeqValue;

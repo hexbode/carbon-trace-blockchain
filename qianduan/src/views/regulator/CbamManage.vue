@@ -55,6 +55,7 @@
             <div class="m-row"><span class="m-key">隐含排放</span><span class="m-val">{{ fmt(row.totalEmissions, 3) }} tCO₂e</span></div>
             <div class="m-row"><span class="m-key">完整性</span><span class="m-val">{{ row.completeness === 'complete' ? '通过' : '缺失' }}</span></div>
             <div class="m-row"><span class="m-key">数据一致性</span><span class="m-val">{{ row.dataChanged ? '已变化' : '一致' }}</span></div>
+            <div class="m-row"><span class="m-key">链上锚点</span><span class="m-val">{{ row.anchorTxHash ? '已锚定' : '未锚定' }}</span></div>
             <div class="m-card-actions">
               <el-button text type="primary" size="small" @click="openDetail(row)">查看</el-button>
               <el-button v-if="row.status === 'submitted'" text type="success" size="small" @click="openReview(row)">确认/退回</el-button>
@@ -100,6 +101,15 @@
               <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
+          <el-table-column label="链上锚点" width="110">
+            <template #default="{ row }">
+              <el-tooltip v-if="row.anchorTxHash"
+                          :content="`${row.anchorTxHash}（区块 ${row.anchorBlock ?? '-'}）`">
+                <el-tag size="small" type="success">已锚定</el-tag>
+              </el-tooltip>
+              <el-tag v-else size="small" type="info">未锚定</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="更新时间" width="160">
             <template #default="{ row }">{{ row.updatedAt || '-' }}</template>
           </el-table-column>
@@ -136,6 +146,17 @@
           <el-descriptions-item label="已付碳价">€ {{ fmt(detail.carbonPrice, 2) }}</el-descriptions-item>
           <el-descriptions-item label="直接排放">{{ fmt(detail.directEmissions, 3) }} tCO₂e</el-descriptions-item>
           <el-descriptions-item label="间接排放">{{ fmt(detail.indirectEmissions, 3) }} tCO₂e</el-descriptions-item>
+          <el-descriptions-item label="快照哈希">
+            <span class="hash">{{ detail.snapshotHash || '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="链上锚点">
+            <template v-if="detail.anchorTxHash">
+              <el-tag size="small" type="success">已锚定</el-tag>
+              区块 {{ detail.anchorBlock ?? '-' }} · {{ detail.anchoredAt || '-' }}
+              <div class="hash">{{ detail.anchorTxHash }}</div>
+            </template>
+            <el-tag v-else size="small" type="info">未锚定</el-tag>
+          </el-descriptions-item>
         </el-descriptions>
         <el-alert v-if="detail.dataChanged" type="warning" :closable="false" show-icon class="mb-16"
                   title="实时排放数据与申报快照不一致"
@@ -415,6 +436,7 @@ onMounted(load)
 .detail-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .detail-no { font-weight: 700; font-size: 16px; color: #0f172a; }
 .detail-title { font-weight: 600; margin-bottom: 8px; color: #0f172a; }
+.hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #475569; word-break: break-all; }
 @media (max-width: 767px) {
   .panel-header .actions { width: 100%; }
 }

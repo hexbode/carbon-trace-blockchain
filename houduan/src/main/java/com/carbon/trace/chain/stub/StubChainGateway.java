@@ -1,10 +1,12 @@
 package com.carbon.trace.chain.stub;
 
 import com.carbon.trace.chain.ChainGateway;
+import com.carbon.trace.chain.model.ChainAnchor;
 import com.carbon.trace.chain.model.ChainBlockView;
 import com.carbon.trace.chain.model.ChainCertCount;
 import com.carbon.trace.chain.model.ChainCertStatus;
 import com.carbon.trace.chain.model.ChainCertificate;
+import com.carbon.trace.chain.model.ChainContractKind;
 import com.carbon.trace.chain.model.CertifyCommand;
 import com.carbon.trace.chain.model.ComplianceInput;
 import com.carbon.trace.chain.model.ComplianceResult;
@@ -25,6 +27,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -67,6 +70,23 @@ public class StubChainGateway implements ChainGateway {
 
     private volatile int thresholdBp = 2000;
     private volatile int lateReportMonths = 1;
+
+    /** CBAM 申报包锚点：declarationNo -> 最新锚点 */
+    private final Map<String, ChainAnchor> cbamAnchors = new ConcurrentHashMap<>();
+
+    /** 桩模式的治理账户与 writer 白名单（仅用于治理页联调，不代表真实链账户） */
+    private static final String STUB_OWNER = "0x0000000000000000000000000000000000000001";
+    private static final String STUB_WRITER = "0x0000000000000000000000000000000000000002";
+    private final Map<ChainContractKind, String> contractOwners = new ConcurrentHashMap<>();
+    private final Map<ChainContractKind, Set<String>> contractWriters = new ConcurrentHashMap<>();
+
+    {
+        for (ChainContractKind kind : ChainContractKind.values()) {
+            contractOwners.put(kind, STUB_OWNER);
+            contractWriters.put(kind, ConcurrentHashMap.newKeySet());
+            contractWriters.get(kind).add(STUB_WRITER);
+        }
+    }
 
     /** 启动提示：显式声明 stub 无区块/无挖矿/不落盘，避免开发环境被误当作真实链 */
     @PostConstruct
@@ -517,6 +537,119 @@ public class StubChainGateway implements ChainGateway {
     @Override
     public int lateReportMonths() {
         return lateReportMonths;
+    }
+
+    // ---------------- CBAM 申报包锚点 ----------------
+
+    /**
+     * 桩模式视为锚点组件可用，便于本机把申报包锚点链路跑通。
+     *
+     * @return 恒为 true
+     */
+    @Override
+    public boolean cbamAnchorAvailable() {
+        return true;
+    }
+
+    /**
+     * 写入内存锚点（覆盖同一申报包的旧锚点，与合约语义一致）。
+     *
+     * @param declarationNo 申报包编号
+     * @param reportYear    申报年度
+     * @param dataVersion   快照数据版本
+     * @param snapshotHash  快照哈希
+     * @return 锚点信息，txHash 为桩伪哈希、区块高度固定 0
+     */
+    @Override
+    public ChainAnchor anchorCbamDeclaration(String declarationNo, int reportYear,
+                                             long dataVersion, String snapshotHash) {
+        ChainAnchor anchor = new ChainAnchor();
+        anchor.setDeclarationNo(declarationNo);
+        anchor.setReportYear(reportYear);
+        anchor.setDataVersion(dataVersion);
+        anchor.setSnapshotHash(snapshotHash == null ? "" : normalize(snapshotHash));
+        anchor.setAnchoredAt(System.currentTimeMillis() / 1000);
+        anchor.setAnchoredBy(STUB_WRITER);
+        anchor.setExists(true);
+        anchor.setTxHash("stub-anchor-" + declarationNo);
+        anchor.setBlockNumber(0L);
+        cbamAnchors.put(declarationNo, anchor);
+        return anchor;
+    }
+
+    /**
+     * 读取内存锚点。
+     *
+     * @param declarationNo 申报包编号
+     * @return 已锚定时返回锚点，否则为空
+     */
+    @Override
+    public Optional<ChainAnchor> cbamAnchorOf(String declarationNo) {
+        return declarationNo == null ? Optional.empty()
+                : Optional.ofNullable(cbamAnchors.get(declarationNo));
+    }
+
+    // ---------------- 合约治理 ----------------
+
+    /**
+     * 桩模式的合约 owner（固定假地址，仅用于页面联调）。
+     *
+     * @param kind 合约类型
+     * @return owner 地址；未知类型返回 null
+     */
+    @Override
+    public String ownerOf(ChainContractKind kind) {
+        return kind == null ? null : contractOwners.get(kind);
+    }
+
+    /**
+     * 桩模式的 writer 查询：owner 或白名单内地址可写。
+     *
+     * @param kind    合约类型
+     * @param account 地址
+     * @return true 表示可写
+     */
+    @Override
+    public boolean isWriter(ChainContractKind kind, String account) {
+        if (kind == null || account == null || account.isBlank()) {
+            return false;
+        }
+        if (account.equalsIgnoreCase(contractOwners.get(kind))) {
+            return true;
+        }
+        Set<String> writers = contractWriters.get(kind);
+        return writers != null && writers.contains(account);
+    }
+
+    /**
+     * 桩模式增删 writer，直接修改内存集合。
+     *
+     * @param kind    合约类型
+     * @param account 目标地址
+     * @param allowed true=加入，false=移出
+     * @throws ApiException 地址为空或合约类型未知时抛出（400）
+     */
+    @Override
+    public void setWriter(ChainContractKind kind, String account, boolean allowed) {
+        if (kind == null || account == null || account.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "合约类型与账户地址不能为空");
+        }
+        Set<String> writers = contractWriters.get(kind);
+        if (allowed) {
+            writers.add(account);
+        } else {
+            writers.remove(account);
+        }
+    }
+
+    /**
+     * 桩模式的逻辑版本号固定为 2（与仓库当前逻辑合约一致）。
+     *
+     * @return 2
+     */
+    @Override
+    public long logicVersion() {
+        return 2L;
     }
 
     /**

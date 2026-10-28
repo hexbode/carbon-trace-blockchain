@@ -2,10 +2,12 @@ package com.carbon.trace.chain.webase;
 
 import com.carbon.trace.chain.ChainGateway;
 import com.carbon.trace.chain.config.ChainProperties;
+import com.carbon.trace.chain.model.ChainAnchor;
 import com.carbon.trace.chain.model.ChainBlockView;
 import com.carbon.trace.chain.model.ChainCertCount;
 import com.carbon.trace.chain.model.ChainCertStatus;
 import com.carbon.trace.chain.model.ChainCertificate;
+import com.carbon.trace.chain.model.ChainContractKind;
 import com.carbon.trace.chain.model.ChainTxView;
 import com.carbon.trace.chain.model.CertifyCommand;
 import com.carbon.trace.chain.model.ComplianceInput;
@@ -85,6 +87,9 @@ public class WebaseChainGateway implements ChainGateway {
 
     /** 认证编号形态：CR + 6 位序号（用于从事件解码结果中识别编号） */
     private static final Pattern CERT_ID_PATTERN = Pattern.compile("^CR\\d{6}$");
+
+    /** 账户地址形态：0x + 40 位十六进制 */
+    private static final Pattern ADDRESS_PATTERN = Pattern.compile("^0x[0-9a-fA-F]{40}$");
 
     private static final String HANDLE_LOCAL = "/trans/handle";
     private static final String HANDLE_WITH_SIGN = "/trans/handleWithSign";
@@ -907,6 +912,160 @@ public class WebaseChainGateway implements ChainGateway {
         return (int) num(values, 0);
     }
 
+    // ---------------- CBAM 申报包锚点 ----------------
+
+    /**
+     * 锚点合约是否已配置。
+     *
+     * @return true 表示 carbon.chain.contracts.cbam-anchor.address 非空
+     */
+    @Override
+    public boolean cbamAnchorAvailable() {
+        return !isBlank(contractCbamAnchor().getAddress());
+    }
+
+    /**
+     * 写入 CBAM 申报包锚点：快照哈希以 bytes32 传入（0x + 64 位十六进制）。
+     *
+     * @param declarationNo 申报包编号
+     * @param reportYear    申报年度
+     * @param dataVersion   快照数据版本
+     * @param snapshotHash  快照 Keccak-256
+     * @return 锚点信息，含交易哈希与区块高度
+     * @throws ApiException 未配置锚点合约、无写权限或链不可达时抛出
+     */
+    @Override
+    public ChainAnchor anchorCbamDeclaration(String declarationNo, int reportYear,
+                                             long dataVersion, String snapshotHash) {
+        ChainProperties.Contract contract = contractCbamAnchor();
+        if (isBlank(contract.getAddress())) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "CBAM 锚点合约未配置");
+        }
+        String hash = normalizeHash(snapshotHash);
+        if (hash.length() != 64) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "申报包快照哈希必须是 32 字节十六进制");
+        }
+        TransHandleReceipt receipt = callWrite(contract, "anchor",
+                List.of(nullToEmpty(declarationNo), (long) reportYear, dataVersion, "0x" + hash));
+
+        ChainAnchor anchor = new ChainAnchor();
+        anchor.setDeclarationNo(declarationNo);
+        anchor.setReportYear(reportYear);
+        anchor.setDataVersion(dataVersion);
+        anchor.setSnapshotHash(hash);
+        anchor.setAnchoredAt(System.currentTimeMillis() / 1000);
+        anchor.setExists(true);
+        anchor.setTxHash(receipt.getTransactionHash());
+        long block = receipt.blockNumberLong();
+        anchor.setBlockNumber(block < 0 ? -1L : block);
+        return anchor;
+    }
+
+    /**
+     * 读取申报包最新锚点。
+     *
+     * 锚点合约未配置时返回空 Optional，不视为错误；返回值顺序与合约 {@code anchorOf} 一致：
+     * exists, reportYear, dataVersion, snapshotHash, anchoredAt, anchoredBy, declarationNo。
+     *
+     * @param declarationNo 申报包编号
+     * @return 锚点；未锚定或未配置合约时为空
+     */
+    @Override
+    public Optional<ChainAnchor> cbamAnchorOf(String declarationNo) {
+        if (isBlank(declarationNo) || !cbamAnchorAvailable()) {
+            return Optional.empty();
+        }
+        JsonNode values = callRead(contractCbamAnchor(), "anchorOf", List.of(declarationNo));
+        ChainAnchor anchor = new ChainAnchor();
+        anchor.setExists(bool(values, 0));
+        anchor.setReportYear((int) num(values, 1));
+        anchor.setDataVersion(num(values, 2));
+        anchor.setSnapshotHash(normalizeHash(unquote(text(values, 3))));
+        anchor.setAnchoredAt(num(values, 4));
+        anchor.setAnchoredBy(unquote(text(values, 5)));
+        anchor.setDeclarationNo(unquote(text(values, 6)));
+        return anchor.isExists() ? Optional.of(anchor) : Optional.empty();
+    }
+
+    // ---------------- 合约治理 ----------------
+
+    /**
+     * 合约 owner：存证类型读数据合约，合规与锚点类型读各自合约。
+     *
+     * @param kind 合约类型
+     * @return owner 地址；对应合约未配置时返回 null
+     */
+    @Override
+    public String ownerOf(ChainContractKind kind) {
+        ChainProperties.Contract contract = governanceReadContract(kind);
+        if (contract == null || isBlank(contract.getAddress())) {
+            return null;
+        }
+        JsonNode values = callRead(contract, "owner", List.of());
+        return unquote(text(values, 0));
+    }
+
+    /**
+     * 查询地址是否具备写入权限（owner 天然可写）。
+     *
+     * @param kind    合约类型
+     * @param account 地址
+     * @return true 表示可写；合约未配置或地址非法时返回 false
+     */
+    @Override
+    public boolean isWriter(ChainContractKind kind, String account) {
+        if (account == null || !ADDRESS_PATTERN.matcher(account.trim()).matches()) {
+            return false;
+        }
+        ChainProperties.Contract contract = governanceReadContract(kind);
+        if (contract == null || isBlank(contract.getAddress())) {
+            return false;
+        }
+        JsonNode values = callRead(contract, "writers", List.of(account.trim()));
+        if (bool(values, 0)) {
+            return true;
+        }
+        String owner = ownerOf(kind);
+        return owner != null && owner.equalsIgnoreCase(account.trim());
+    }
+
+    /**
+     * 增删 writer：存证类型写逻辑合约，合规与锚点类型写各自合约。
+     *
+     * @param kind    合约类型
+     * @param account 目标地址
+     * @param allowed true=加入，false=移出
+     * @throws ApiException 地址非法、合约未配置、非 owner 或链不可达时抛出
+     */
+    @Override
+    public void setWriter(ChainContractKind kind, String account, boolean allowed) {
+        if (account == null || !ADDRESS_PATTERN.matcher(account.trim()).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "账户地址必须是 0x + 40 位十六进制");
+        }
+        ChainProperties.Contract contract = governanceWriteContract(kind);
+        if (contract == null || isBlank(contract.getAddress())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                    "合约未配置，无法修改 writer：" + (kind == null ? "未知类型" : kind.getLabel()));
+        }
+        callWrite(contract, allowed ? "addWriter" : "removeWriter", List.of(account.trim()));
+    }
+
+    /**
+     * 当前逻辑合约版本号。
+     *
+     * @return 版本号；读取失败返回 -1（治理页按未知展示，不阻断其他信息）
+     */
+    @Override
+    public long logicVersion() {
+        try {
+            JsonNode values = callRead(contractRegistry(), "logicVersion", List.of());
+            return num(values, 0);
+        } catch (RuntimeException e) {
+            log.info("逻辑合约版本号不可用：{}", e.getMessage());
+            return -1L;
+        }
+    }
+
     // ---------------- 健康 ----------------
 
     /**
@@ -1354,6 +1513,58 @@ public class WebaseChainGateway implements ChainGateway {
     }
 
     /**
+     * 认证存证数据合约配置（仅供治理页面读取 owner / writers）。
+     *
+     * @return 配置对象，恒不为 null
+     */
+    private ChainProperties.Contract contractRegistryData() {
+        return properties.getContracts().getRegistryData();
+    }
+
+    /**
+     * CBAM 锚点合约配置。
+     *
+     * @return 配置对象，恒不为 null
+     */
+    private ChainProperties.Contract contractCbamAnchor() {
+        return properties.getContracts().getCbamAnchor();
+    }
+
+    /**
+     * 治理读操作使用的合约：存证读数据合约，其余读各自合约。
+     *
+     * @param kind 合约类型
+     * @return 合约配置；未知类型返回 null
+     */
+    private ChainProperties.Contract governanceReadContract(ChainContractKind kind) {
+        if (kind == null) {
+            return null;
+        }
+        return switch (kind) {
+            case REGISTRY -> contractRegistryData();
+            case COMPLIANCE -> contractCompliance();
+            case CBAM_ANCHOR -> contractCbamAnchor();
+        };
+    }
+
+    /**
+     * 治理写操作使用的合约：存证写逻辑合约，其余写各自合约。
+     *
+     * @param kind 合约类型
+     * @return 合约配置；未知类型返回 null
+     */
+    private ChainProperties.Contract governanceWriteContract(ChainContractKind kind) {
+        if (kind == null) {
+            return null;
+        }
+        return switch (kind) {
+            case REGISTRY -> contractRegistry();
+            case COMPLIANCE -> contractCompliance();
+            case CBAM_ANCHOR -> contractCbamAnchor();
+        };
+    }
+
+    /**
      * 取合约地址；未配置视为内部配置错误直接抛 500。
      *
      * 正常启动路径已由 {@link #selfCheck()} 拦截空地址；这里兜底运行期被改配置/反射置空的情况。
@@ -1428,6 +1639,16 @@ public class WebaseChainGateway implements ChainGateway {
      */
     private static String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * 判断字符串是否为 null / 空白。
+     *
+     * @param value 待判断字符串
+     * @return true 表示 null、空串或仅空白
+     */
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /**

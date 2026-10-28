@@ -64,6 +64,18 @@ public class CbamDeclaration {
     /** 申报包 JSON 快照 */
     private String packageJson;
 
+    /** 申报包 JSON 快照的 Keccak-256（64 位十六进制，生成快照时写入） */
+    private String snapshotHash;
+
+    /** 锚点写链交易哈希；为空表示尚未锚定或链不可用 */
+    private String anchorTxHash;
+
+    /** 锚点交易所在区块高度 */
+    private Long anchorBlock;
+
+    /** 锚点写链完成时间 */
+    private LocalDateTime anchoredAt;
+
     /** 生成时的数据版本快照（对应 cbam_data_versions.version） */
     private Long dataVersion;
 

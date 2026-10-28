@@ -1,6 +1,10 @@
 package com.carbon.trace.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.carbon.trace.chain.ChainGateway;
+import com.carbon.trace.chain.model.ChainAnchor;
+import com.carbon.trace.chain.support.Keccak256;
 import com.carbon.trace.common.ApiException;
 import com.carbon.trace.cbam.CbamOutboxService;
 import com.carbon.trace.entity.CbamDeclaration;
@@ -21,8 +25,11 @@ import com.carbon.trace.mapper.CbamVerificationReportMapper;
 import com.carbon.trace.mapper.CbamVerifierMapper;
 import com.carbon.trace.mapper.EnterpriseMapper;
 import com.carbon.trace.service.CbamService;
+import com.carbon.trace.service.ChainSyncService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -51,6 +58,8 @@ import java.util.Set;
 @Service
 public class CbamServiceImpl implements CbamService {
 
+    private static final Logger log = LoggerFactory.getLogger(CbamServiceImpl.class);
+
     private final CbamGoodsMapper goodsMapper;
     private final CbamInstallationMapper installationMapper;
     private final CbamProductEmissionMapper emissionMapper;
@@ -62,6 +71,8 @@ public class CbamServiceImpl implements CbamService {
     private final CbamOutboxService outboxService;
     private final EnterpriseMapper enterpriseMapper;
     private final ObjectMapper objectMapper;
+    private final ChainGateway chainGateway;
+    private final ChainSyncService chainSyncService;
 
     public CbamServiceImpl(CbamGoodsMapper goodsMapper,
                            CbamInstallationMapper installationMapper,
@@ -73,7 +84,9 @@ public class CbamServiceImpl implements CbamService {
                            CbamReconciliationLogMapper reconciliationLogMapper,
                            CbamOutboxService outboxService,
                            EnterpriseMapper enterpriseMapper,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           ChainGateway chainGateway,
+                           ChainSyncService chainSyncService) {
         this.goodsMapper = goodsMapper;
         this.installationMapper = installationMapper;
         this.emissionMapper = emissionMapper;
@@ -85,6 +98,8 @@ public class CbamServiceImpl implements CbamService {
         this.outboxService = outboxService;
         this.enterpriseMapper = enterpriseMapper;
         this.objectMapper = objectMapper;
+        this.chainGateway = chainGateway;
+        this.chainSyncService = chainSyncService;
     }
 
     // ==================== 产品目录 ====================
@@ -549,7 +564,13 @@ public class CbamServiceImpl implements CbamService {
         declaration.setDataVersion(currentVersion(enterpriseId, year));
         declaration.setDeclarationNo(existing != null && StringUtils.hasText(existing.getDeclarationNo())
                 ? existing.getDeclarationNo() : "CBAM-" + year + "-" + enterpriseId);
-        declaration.setPackageJson(toJson(buildPackage(declaration, enterprise, items, missing)));
+        String packageJson = toJson(buildPackage(declaration, enterprise, items, missing));
+        declaration.setPackageJson(packageJson);
+        // 快照哈希在生成时固化，提交时只把该哈希与数据版本锚定上链
+        declaration.setSnapshotHash(Keccak256.hashHex(packageJson));
+        // 空串而非 null：MyBatis-Plus 默认忽略 null，重新生成时必须显式清掉上一次锚点
+        declaration.setAnchorTxHash("");
+        declaration.setAnchorBlock(0L);
         LocalDateTime now = LocalDateTime.now();
         declaration.setUpdatedAt(now);
         if (existing == null) {
@@ -558,6 +579,10 @@ public class CbamServiceImpl implements CbamService {
         } else {
             declarationMapper.updateById(declaration);
         }
+        // anchored_at 无法用实体 null 清空（updateById 忽略 null），单独用 UpdateWrapper 置空
+        declarationMapper.update(null, new LambdaUpdateWrapper<CbamDeclaration>()
+                .eq(CbamDeclaration::getId, declaration.getId())
+                .set(CbamDeclaration::getAnchoredAt, null));
         CbamDeclaration result = getDeclaration(declaration.getId());
         outboxService.append(result, "DECLARATION_GENERATED");
         return result;
@@ -614,6 +639,8 @@ public class CbamServiceImpl implements CbamService {
         declarationMapper.updateById(declaration);
         CbamDeclaration result = getDeclaration(id);
         outboxService.append(result, "DECLARATION_SUBMITTED");
+        // 提交是冻结快照的时点：事务提交后把快照哈希与数据版本锚定上链
+        anchorDeclaration(result);
         return result;
     }
 
@@ -637,7 +664,45 @@ public class CbamServiceImpl implements CbamService {
         declarationMapper.updateById(declaration);
         CbamDeclaration result = getDeclaration(id);
         outboxService.append(result, approved ? "DECLARATION_APPROVED" : "DECLARATION_RETURNED");
+        // 兼容历史数据：若提交时未锚定（锚点功能上线前提交），确认时补写一次锚点
+        if (approved) {
+            anchorDeclaration(result);
+        }
         return result;
+    }
+
+    /**
+     * 事务提交后把申报包快照哈希与数据版本写入链上锚点。
+     *
+     * 锚点合约未配置、快照哈希缺失或已锚定时直接跳过；写链失败由 {@link ChainSyncService}
+     * 按退避重试并最终生成 chain_failed 告警，不阻塞申报包状态流转。
+     *
+     * @param declaration 已提交/已确认的申报包（需含 snapshotHash 与 declarationNo）
+     */
+    private void anchorDeclaration(CbamDeclaration declaration) {
+        if (declaration == null || !StringUtils.hasText(declaration.getSnapshotHash())
+                || !StringUtils.hasText(declaration.getDeclarationNo())
+                || StringUtils.hasText(declaration.getAnchorTxHash())) {
+            return;
+        }
+        if (!chainGateway.cbamAnchorAvailable()) {
+            log.info("CBAM 锚点合约未配置，申报包 {} 跳过锚点上链", declaration.getDeclarationNo());
+            return;
+        }
+        Enterprise enterprise = enterpriseMapper.selectById(declaration.getEnterpriseId());
+        String enterpriseName = enterprise == null ? "" : enterprise.getName();
+        long version = declaration.getDataVersion() == null ? 0L : declaration.getDataVersion();
+        chainSyncService.afterCommit("CBAM 申报包锚点", declaration.getEnterpriseId(), enterpriseName,
+                String.valueOf(declaration.getReportYear()), () -> {
+                    ChainAnchor anchor = chainGateway.anchorCbamDeclaration(declaration.getDeclarationNo(),
+                            declaration.getReportYear(), version, declaration.getSnapshotHash());
+                    CbamDeclaration patch = new CbamDeclaration();
+                    patch.setId(declaration.getId());
+                    patch.setAnchorTxHash(anchor.getTxHash());
+                    patch.setAnchorBlock(anchor.getBlockNumber());
+                    patch.setAnchoredAt(LocalDateTime.now());
+                    declarationMapper.updateById(patch);
+                });
     }
 
     @Override

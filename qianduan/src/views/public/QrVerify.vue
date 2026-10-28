@@ -120,6 +120,8 @@ import jsQR from 'jsqr'
 import { qrResolve, getSampleCerts } from '@/api/publicApi'
 // 引入设备检测：手机端二维码与操作区改为上下排列
 import { useDevice } from '@/composables/useDevice'
+// 引入核验链接生成（基地址与 HTTPS 端口可配置，避免硬编码 8443）
+import { buildQrPayload, httpsHintUrl } from '@/utils/qr'
 
 // 设备类型（手机端切换布局）
 const { isMobile } = useDevice()
@@ -139,10 +141,10 @@ const fileRef = ref(null)
 const cameraOn = ref(false)
 // 是否为安全上下文（HTTPS 或 localhost）；HTTP 局域网下浏览器禁用摄像头
 const secureContext = window.isSecureContext
-// HTTP 访问时提示的 HTTPS 地址（8443 已映射到 nginx 443，自签证书）
-const httpsUrl = computed(() => `https://${window.location.hostname}:8443/#/public/qr`)
 // 自签证书下载地址：手机安装并信任后可不再出现安全警告
 const certUrl = computed(() => `${window.location.origin}/carbon.crt`)
+// HTTP 访问时提示的 HTTPS 地址（端口可配置，见 utils/qr.js）
+const httpsUrl = httpsHintUrl('/#/public/qr')
 // 摄像头媒体流与动画帧句柄
 let stream = null
 let rafId = 0
@@ -151,17 +153,6 @@ let rafId = 0
 const qrDataUrl = ref('')
 // 防抖句柄：避免输入过程中频繁生成
 let qrTimer = null
-
-// 核验页面基地址：HTTP 访问时统一指向 HTTPS(8443)，保证扫码打开的是安全上下文（网页摄像头可用）
-function verificationBase() {
-  if (window.location.protocol === 'https:') return window.location.origin
-  return `https://${window.location.hostname}:8443`
-}
-
-// 二维码内容：编码为可直接打开的核验链接，手机相机扫码后可跳转并自动查询
-function buildQrPayload(fp) {
-  return `${verificationBase()}/#/public/query?fp=${encodeURIComponent(fp)}`
-}
 
 // 依据防伪码生成真实二维码；防伪码为空时清空预览
 async function generateQr(fp) {

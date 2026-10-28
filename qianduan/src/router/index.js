@@ -48,6 +48,7 @@ export const menuConfig = {
       { path: '/regulator/cbam', name: 'CbamManage', title: 'CBAM 申报管理', icon: 'Files' },
       { path: '/regulator/industry-stats', name: 'IndustryStats', title: '行业碳排放统计', icon: 'DataLine' },
       { path: '/regulator/alerts', name: 'Alerts', title: '异常数据监控', icon: 'Warning' },
+      { path: '/regulator/governance', name: 'ChainGovernance', title: '链上治理', icon: 'Key' },
       { path: '/regulator/users', name: 'UserManage', title: '用户管理', icon: 'User' }
     ]
   }
@@ -113,6 +114,7 @@ const routes = [
       { path: 'regulator/cbam', name: 'CbamManage', component: () => import('@/views/regulator/CbamManage.vue'), meta: { title: 'CBAM 申报管理', roles: ['regulator', 'admin'] } },
       { path: 'regulator/industry-stats', name: 'IndustryStats', component: () => import('@/views/regulator/IndustryStats.vue'), meta: { title: '行业碳排放统计', roles: ['regulator', 'admin'] } },
       { path: 'regulator/alerts', name: 'Alerts', component: () => import('@/views/regulator/Alerts.vue'), meta: { title: '异常数据监控', roles: ['regulator', 'admin'] } },
+      { path: 'regulator/governance', name: 'ChainGovernance', component: () => import('@/views/regulator/ChainGovernance.vue'), meta: { title: '链上治理', roles: ['regulator', 'admin'] } },
       { path: 'regulator/users', name: 'UserManage', component: () => import('@/views/regulator/UserManage.vue'), meta: { title: '用户管理', roles: ['regulator', 'admin'] } }
     ]
   },

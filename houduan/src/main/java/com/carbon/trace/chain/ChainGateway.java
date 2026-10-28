@@ -1,8 +1,10 @@
 package com.carbon.trace.chain;
 
+import com.carbon.trace.chain.model.ChainAnchor;
 import com.carbon.trace.chain.model.ChainBlockView;
 import com.carbon.trace.chain.model.ChainCertCount;
 import com.carbon.trace.chain.model.ChainCertificate;
+import com.carbon.trace.chain.model.ChainContractKind;
 import com.carbon.trace.chain.model.CertifyCommand;
 import com.carbon.trace.chain.model.ComplianceInput;
 import com.carbon.trace.chain.model.ComplianceResult;
@@ -289,6 +291,75 @@ public interface ChainGateway {
      * @return 判定月数；链上不可读时返回 0
      */
     int lateReportMonths();
+
+    // ---------------- CBAM 申报包锚点 ----------------
+
+    /**
+     * CBAM 锚点合约是否已配置可用。
+     *
+     * 锚点合约是 P1 的可选组件：未配置时后端不发起锚点写入，申报包提交仍可正常完成。
+     *
+     * @return true 表示可以写入/读取锚点
+     */
+    boolean cbamAnchorAvailable();
+
+    /**
+     * 把申报包快照哈希与数据版本写入锚点合约（写链）。
+     *
+     * @param declarationNo 申报包编号
+     * @param reportYear    申报年度
+     * @param dataVersion   生成快照时的数据版本
+     * @param snapshotHash  申报包 JSON 的 Keccak-256（64 位十六进制，可带 0x）
+     * @return 锚点信息，含本次交易哈希与区块高度
+     * @throws com.carbon.trace.common.ApiException 未配置锚点合约、无写权限或链不可达时抛出
+     */
+    ChainAnchor anchorCbamDeclaration(String declarationNo, int reportYear, long dataVersion, String snapshotHash);
+
+    /**
+     * 查询申报包在链上的最新锚点。
+     *
+     * @param declarationNo 申报包编号
+     * @return 命中返回锚点；未锚定或未配置锚点合约时返回空 Optional
+     */
+    Optional<ChainAnchor> cbamAnchorOf(String declarationNo);
+
+    // ---------------- 合约治理 ----------------
+
+    /**
+     * 合约管理员地址。
+     *
+     * 存证类型读取数据合约的 owner；合规与锚点类型读取各自合约的 owner。
+     *
+     * @param kind 合约类型
+     * @return owner 地址；合约未配置时返回 null
+     */
+    String ownerOf(ChainContractKind kind);
+
+    /**
+     * 查询某地址是否具备写入权限（owner 视为具备）。
+     *
+     * @param kind    合约类型
+     * @param account 待查询地址
+     * @return true 表示该地址可写；合约未配置或地址格式非法时返回 false
+     */
+    boolean isWriter(ChainContractKind kind, String account);
+
+    /**
+     * 增删写入白名单（写链，仅 owner 可执行）。
+     *
+     * @param kind    合约类型
+     * @param account 目标地址
+     * @param allowed true=加入白名单，false=移出
+     * @throws com.carbon.trace.common.ApiException 合约未配置、非 owner、地址非法或链不可达时抛出
+     */
+    void setWriter(ChainContractKind kind, String account, boolean allowed);
+
+    /**
+     * 当前认证存证逻辑合约版本号。
+     *
+     * @return 逻辑合约返回的版本号；读取失败时返回 -1
+     */
+    long logicVersion();
 
     // ---------------- 健康 ----------------
 

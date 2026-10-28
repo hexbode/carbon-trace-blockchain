@@ -93,7 +93,7 @@ public class ChainProperties {
         private int timeoutMs = 15000;
     }
 
-    /** 两个业务合约的配置；地址为空会在 WebaseChainGateway 启动自检时快速失败 */
+    /** 业务合约的配置；registry / compliance 地址为空会在 WebaseChainGateway 启动自检时快速失败，其余为可选项 */
     @Data
     public static class Contracts {
 
@@ -108,6 +108,23 @@ public class ChainProperties {
                 "classpath:chain/CertRegistryLogic.abi.json");
 
         private Contract compliance = new Contract("CarbonCompliance", "", "classpath:chain/CarbonCompliance.abi.json");
+
+        /**
+         * 认证存证数据合约（CertRegistryData）。
+         *
+         * 后端不直连它做业务读写；仅治理页面读取 owner / writers，升级仍由部署脚本调用 updateLogic。
+         * 地址为空时治理页面把存证合约标记为「未配置」，不影响证书业务。
+         */
+        private Contract registryData = new Contract("CertRegistryData", "",
+                "classpath:chain/CertRegistryData.abi.json");
+
+        /**
+         * CBAM 申报包锚点合约（CbamAnchorRegistry）。
+         *
+         * 可选组件：未配置时申报包提交仍正常，只是不写链上锚点。
+         */
+        private Contract cbamAnchor = new Contract("CbamAnchorRegistry", "",
+                "classpath:chain/CbamAnchorRegistry.abi.json");
     }
 
     /**

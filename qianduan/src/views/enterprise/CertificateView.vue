@@ -160,6 +160,8 @@ import { jsPDF } from 'jspdf'
 import QRCode from 'qrcode'
 // 引入设备检测：手机端渲染卡片列表并自适应证书详情
 import { useDevice } from '@/composables/useDevice'
+// 引入核验链接生成（基地址可配置，避免硬编码 HTTPS 端口）
+import { buildQrPayload } from '@/utils/qr'
 
 // 用户 store 实例
 const userStore = useUserStore()
@@ -182,22 +184,8 @@ const qrDataUrl = ref('')
 // PDF 生成中的按钮状态
 const downloading = ref(false)
 
-// 核验页面基地址
-// 为什么 HTTP 下要指向 HTTPS 8443：
-//   网页摄像头/扫码能力只在安全上下文（HTTPS 或 localhost）中可用。若企业端以 HTTP 访问，
-//   二维码里若写同源 HTTP 地址，手机打开后公共查询端无法调用摄像头，因此统一改写到同主机的
-//   HTTPS 端口 8443（部署时该端口映射到 nginx 的 SSL 监听，见 README 的端口映射说明），
-//   自签证书可让手机安装信任后正常访问；HTTPS 访问时直接沿用当前 origin，无需改写端口。
-function verificationBase() {
-  if (window.location.protocol === 'https:') return window.location.origin
-  return `https://${window.location.hostname}:8443`
-}
-
 // 二维码内容：公共查询端核验链接（hash 路由 /#/public/query，fp 为编码后的电子防伪码），
-// 手机扫码后公共端自动带出防伪码并查询
-function buildQrPayload(fingerprint) {
-  return `${verificationBase()}/#/public/query?fp=${encodeURIComponent(fingerprint)}`
-}
+// 手机扫码后公共端自动带出防伪码并查询；基地址支持 VITE_QR_BASE_URL 配置（见 utils/qr.js）
 
 // 生成证书核验二维码（弹窗展示用）：容错等级 M、静区 1 模块、深绿近黑前景保证打印/屏幕识别率；
 // 生成失败时清空二维码，不阻断证书正文展示

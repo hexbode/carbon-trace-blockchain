@@ -98,6 +98,16 @@ carbon:
         name: CarbonCompliance
         address: ${CARBON_CHAIN_COMPLIANCE_ADDRESS:}
         abi-location: classpath:chain/CarbonCompliance.abi.json
+      # 认证存证数据合约：后端只用于治理页面读取 owner / writers，业务读写仍走 registry（逻辑合约）
+      registry-data:
+        name: CertRegistryData
+        address: ${CARBON_CHAIN_REGISTRY_DATA_ADDRESS:}
+        abi-location: classpath:chain/CertRegistryData.abi.json
+      # CBAM 申报包锚点合约（P1，可选）：地址为空时不写链上锚点
+      cbam-anchor:
+        name: CbamAnchorRegistry
+        address: ${CARBON_CHAIN_CBAM_ANCHOR_ADDRESS:}
+        abi-location: classpath:chain/CbamAnchorRegistry.abi.json
     # 区块浏览每页最多返回的区块数
     block-list-limit: 20
     # 链上存证与业务库的一致性对账间隔（毫秒）
